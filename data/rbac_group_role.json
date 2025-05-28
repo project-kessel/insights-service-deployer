@@ -1,0 +1,39 @@
+{
+  "group": {
+    "name": "Ephemeral-Group",
+    "description": "Group for Ephemeral tests"
+  },
+  "role": {
+    "name": "Ephemeral-Role",
+    "display_name": "Ephemeral-Role",
+    "description": "Role for Ephemeral tests",
+    "access": [
+      {
+        "permission": "inventory:*:*",
+        "resourceDefinitions": []
+      },
+      {
+        "permission": "remediations:*:*",
+        "resourceDefinitions": [
+          {
+            "attributeFilter": {
+              "key": "service",
+              "operation": "equal",
+              "value": "tasks"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "principals": {
+    "principals": [
+      {
+        "username": "rbac_admin"
+      },
+      {
+        "username": "rbac_user"
+      }
+    ]
+  }
+}
