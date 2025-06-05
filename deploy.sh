@@ -320,8 +320,18 @@ show_bonfire_namespace() {
   bonfire namespace describe
 }
 
+add_group_role_to_rbac() {
+  echo "Creating Group and Role in RBAC from data/rbac_group_role.json"
+
+  echo "Loading users into Keycloak"
+  scripts/rbac_load_users.sh
+
+  echo "Creating group, role and principals"
+  scripts/rbac_add_group_role.sh
+}
+
 usage() {
-  echo "Usage: $SCRIPT_NAME {release_current_namespace|deploy|deploy_with_hbi_demo|clean_download_debezium_configuration|deploy_unleash_importer_image|add_hosts_to_hbi|add_users_to_hbi}"
+  echo "Usage: $SCRIPT_NAME {release_current_namespace|deploy|deploy_with_hbi_demo|clean_download_debezium_configuration|deploy_unleash_importer_image|add_hosts_to_hbi|add_users_to_hbi|add_group_role_to_rbac}"
   exit 1
 }
 
@@ -362,6 +372,9 @@ case "$1" in
     ;;
   deploy_unleash_importer_image)
     deploy_unleash_importer_image
+    ;;
+  add_group_role_to_rbac)
+    add_group_role_to_rbac
     ;;
   *)
     usage
