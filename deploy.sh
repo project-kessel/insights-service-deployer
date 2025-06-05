@@ -13,49 +13,22 @@ login() {
   oc login --token="${EPHEMERAL_TOKEN}" --server=${EPHEMERAL_SERVER}
 }
 
-check_bonfire_namespace() {
-  NAMESPACE=`oc project -q 2>/dev/null || true`
-  if [[ -z $NAMESPACE ]]; then
-    echo "No bonfire namespace set, reserving a namespace for you now (duration 10hr)..."
-    bonfire namespace reserve --duration 10h
-  fi
-}
-
 release_current_namespace() {
   echo "Releasing current environment.."
   login
   bonfire namespace release `oc project -q`
 }
 
-# parameters $1: deploy template branch; $2: custom image; $3: custom image tag
 deploy() {
+  login
   echo "Deploying..."
-
-  NAMESPACE=`oc project -q`
-
-  HBI_CUSTOM_IMAGE="quay.io/cloudservices/insights-inventory"
-  HBI_CUSTOM_IMAGE_TAG=latest
-  HBI_CUSTOM_IMAGE_PARAMETER=""
-  if [ -n "$1" ]; then
-    HBI_DEPLOYMENT_TEMPLATE_REF="$1"
-  else
-    HOST_GIT_COMMIT=$(echo $(git ls-remote https://github.com/RedHatInsights/insights-host-inventory HEAD) | cut -d ' ' -f1)
-    HBI_DEPLOYMENT_TEMPLATE_REF="$HOST_GIT_COMMIT"
-  fi
-  if [ -n "$2" ]; then
-    HBI_CUSTOM_IMAGE="$2"
-    HBI_CUSTOM_IMAGE_PARAMETER="-p host-inventory/IMAGE=${HBI_CUSTOM_IMAGE}"
-  fi
-  if [ -n "$3" ]; then
-    HBI_CUSTOM_IMAGE_TAG="$3"
-  fi
-
+  HOST_GIT_COMMIT=$(echo $(git ls-remote https://github.com/RedHatInsights/insights-host-inventory HEAD) | cut -d ' ' -f1)
   HOST_FRONTEND_GIT_COMMIT=$(echo $(git ls-remote https://github.com/RedHatInsights/insights-inventory-frontend HEAD) | cut -d ' ' -f1 | cut -c1-7)
   bonfire deploy host-inventory -F true -p host-inventory/RBAC_V2_FORCE_ORG_ADMIN=true \
   -p host-inventory/URLLIB3_LOG_LEVEL=WARN \
   --ref-env insights-stage \
   -p host-inventory/CONSUMER_MQ_BROKER=rbac-kafka-kafka-bootstrap:9092  \
-  --set-template-ref host-inventory="$HBI_DEPLOYMENT_TEMPLATE_REF"  \
+  --set-template-ref host-inventory="${HOST_GIT_COMMIT}"  \
   -p rbac/V2_APIS_ENABLED=True -p rbac/V2_READ_ONLY_API_MODE=False -p rbac/V2_BOOTSTRAP_TENANT=True \
   -p rbac/REPLICATION_TO_RELATION_ENABLED=True -p rbac/BYPASS_BOP_VERIFICATION=True \
   -p rbac/KAFKA_ENABLED=False -p rbac/NOTIFICATONS_ENABLED=False \
@@ -74,9 +47,8 @@ ros,\
 staleness,\
 config-manager,\
 idmsvc" \
-  ${HBI_CUSTOM_IMAGE_PARAMETER} -p rbac/V2_MIGRATION_APP_EXCLUDE_LIST="approval" \
-  -p host-inventory/KESSEL_TARGET_URL=kessel-inventory-api.$NAMESPACE.svc.cluster.local:9000 \
-  --set-image-tag "${HBI_CUSTOM_IMAGE}=${HBI_CUSTOM_IMAGE_TAG}" \
+  -p rbac/V2_MIGRATION_APP_EXCLUDE_LIST="approval" \
+  --set-image-tag quay.io/cloudservices/insights-inventory=latest \
   --set-image-tag quay.io/cloudservices/insights-inventory-frontend="${HOST_FRONTEND_GIT_COMMIT}" \
   --set-image-tag quay.io/redhat-services-prod/hcc-platex-services/chrome-service=latest \
   --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac=latest \
@@ -140,6 +112,8 @@ setup_sink_connector() {
    -p relations-sink-ephemeral/RELATIONS_SINK_IMAGE=$RELATIONS_SINK_IMAGE \
    -p relations-sink-ephemeral/BOOTSTRAP_SERVERS=$BOOTSTRAP_SERVERS \
    -p relations-sink-ephemeral/IMAGE_TAG=$IMAGE_TAG
+
+   deploy_unleash_importer_image
 }
 
 download_debezium_configuration() {
@@ -191,65 +165,17 @@ build_unleash_importer_image() {
     if [[ -z "${quay_user}" ]]; then
       echo "Current user is not logged into quay with podman -- but don't worry! -- defaulting to pre-built image (quay.io/mmclaugh/kessel-unleash-import:latest) in deployment."
     else
-      REPO_NAME=kessel-unleash-import
-      IMAGE="quay.io/$quay_user/$REPO_NAME"
+      IMAGE="quay.io/$quay_user/kessel-unleash-import"
       TAG="latest"
       IMAGE_TAG="$IMAGE:$TAG"
       podman build --platform linux/amd64 . -f docker/Dockerfile.UnleashImporter -t "$IMAGE_TAG"
       podman push "$IMAGE_TAG"
       podman rmi "$IMAGE_TAG"
       echo "Image built, pushed to $IMAGE_TAG and deleted locally."
+      echo "Note: Your quay.io repo needs to be public for the image to be pulled for ephemeral deployments!"
       UNLEASH_IMAGE="$IMAGE"
       UNLEASH_TAG="$TAG"
-
-      check_quay_repo_public "$quay_user" "$REPO_NAME"
     fi
-  fi
-}
-
-check_quay_repo_public() {
-  echo "Checking visibility of your personal Unleash Quay repo, which needs to be public..."
-
-  local REPO_NAMESPACE="$1"
-  local REPO_NAME="$2"
-
-  local API_BASE="https://quay.io/api/v1"
-  local REPO_ENDPOINT="$API_BASE/repository/$REPO_NAMESPACE/$REPO_NAME"
-
-  local response
-  response=$(curl -s -w "\n%{http_code}" "$REPO_ENDPOINT")
-  local body=$(echo "$response" | sed '$d')
-  local http_code=$(echo "$response" | tail -n1)
-
-  if [[ "$http_code" == "401" ]]; then
-    :
-  elif [[ "$http_code" != "200" ]]; then
-    echo "❌ Failed to retrieve repository info for '$REPO_NAMESPACE/$REPO_NAME'. HTTP status: $http_code"
-    echo "$body"
-    echo "This is a bug with the script. Please contact the kessel team!"
-    return 1
-  fi
-
-  local is_public="false"
-  if [[ "$http_code" == "200" ]]; then
-    is_public=$(echo "$body" | jq -r '.is_public' 2>/dev/null)
-  fi
-
-  if [[ "$is_public" == "true" ]]; then
-    echo "✅ Repository is public."
-  else
-    echo "⚠️ $REPO_NAMESPACE/$REPO_NAME repository looks like it's private."
-    echo ""
-    echo "  What happened?"
-    echo "  If it's the first time you've run this script, and it built and pushed a new unleash"
-    echo "  image to manage ephemeral feature flags (based on flags in unleash/unleash_project.json), then you need to manually"
-    echo "  change the visibility of the repo to 'public'. Then just re-run the script and you should be good."
-    echo ""
-    echo "👉 Please make the repository public manually via the Quay.io web console:"
-    echo "  1. Go to https://quay.io/repository/$REPO_NAMESPACE/$REPO_NAME"
-    echo "  2. Click the 'Settings' tab."
-    echo "  3. Change the 'Repository Visibility' to Public."
-    return 1
   fi
 }
 
@@ -340,18 +266,12 @@ case "$1" in
     release_current_namespace
     ;;
   deploy)
-    login
-    check_bonfire_namespace
-    deploy_unleash_importer_image
-    deploy "$2" "$3" "$4"
+    deploy
     wait_for_sink_connector_ready
     show_bonfire_namespace
     ;;
   deploy_with_hbi_demo)
-    login
-    check_bonfire_namespace
-    deploy_unleash_importer_image
-    deploy "$2" "$3" "$4"
+    deploy
     add_hosts_to_hbi
     add_users_to_hbi
     wait_for_sink_connector_ready
@@ -369,9 +289,6 @@ case "$1" in
     ;;
   add_users_to_hbi)
     add_users_to_hbi
-    ;;
-  deploy_unleash_importer_image)
-    deploy_unleash_importer_image
     ;;
   add_group_role_to_rbac)
     add_group_role_to_rbac
