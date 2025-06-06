@@ -354,6 +354,7 @@ case "$1" in
     deploy "$2" "$3" "$4"
     add_hosts_to_hbi
     add_users_to_hbi
+    add_group_role_to_rbac
     wait_for_sink_connector_ready
     show_bonfire_namespace
     ;;
