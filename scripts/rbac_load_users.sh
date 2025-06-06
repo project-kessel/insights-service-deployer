@@ -29,7 +29,7 @@ CLIENT_ID="admin-cli"
 JSON_FILE="./data/rbac_users_data.json"
 
 TOKEN_RESPONSE=$(curl -s -X POST \
-  "${KEYCLOAK_ADMIN_ROUTE}/realms/${MASTER_REALM_NAME}/protocol/openid-connect/token" \
+  "${KEYCLOAK_ADMIN_ROUTE}realms/${MASTER_REALM_NAME}/protocol/openid-connect/token" \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d "scope=openid&grant_type=password&username=${KEYCLOAK_ADMIN_USERNAME}&password=${KEYCLOAK_ADMIN_PASSWORD}&client_id=${CLIENT_ID}")
 
