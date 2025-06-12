@@ -3,6 +3,9 @@
 set -e
 
 login() {
+  user="$(oc whoami < /dev/null)"
+  [[ $? -eq 0 ]] && echo "Skipping login. Already logged in as user: $user" && return 0
+
   if [[ -z "${EPHEMERAL_TOKEN}" || -z "${EPHEMERAL_SERVER}" ]]; then
     [[ -z "${EPHEMERAL_TOKEN}" ]] && echo " - EPHEMERAL_TOKEN is not set"
     [[ -z "${EPHEMERAL_SERVER}" ]] && echo " - EPHEMERAL_SERVER is not set"
@@ -320,6 +323,10 @@ wait_for_sink_connector_ready() {
   oc wait kafkaconnector/relations-sink-connector --for=condition=Ready --timeout=300s
 }
 
+iqe() {
+    bonfire deploy-iqe-cji kessel-inventory --namespace `oc project -q` --debug-pod
+}
+
 show_bonfire_namespace() {
   bonfire namespace describe
 }
@@ -367,6 +374,9 @@ case "$1" in
   deploy_unleash_importer_image)
     deploy_unleash_importer_image
     ;;
+  iqe)
+    iqe
+    ;; 
   *)
     usage
     ;;
