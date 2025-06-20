@@ -18,6 +18,8 @@ EPHEMERAL_TOKEN can be obtained from https://oauth-openshift.apps.crc-eph.r9lp.p
 git clone git@github.com:project-kessel/insights-service-deployer.git
 export EPHEMERAL_TOKEN=<> # get token from ephemeral cluster
 export EPHEMERAL_SERVER=<> # get server from ephemeral cluster
+# log into ephemeral cluster
+oc login --token="${EPHEMERAL_TOKEN}" --server="${EPHEMERAL_SERVER}" 
 ./deploy.sh deploy
 ```
 
