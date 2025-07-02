@@ -13,11 +13,14 @@ PROXY_URL="$GATEWAY/api/inventory/v1/hosts"
 WORKSPACE_UUID="0197c57c-d458-7372-ac1f-0c981f0536e3"
 HOST_UUID="8fdf25c7-eda8-48c2-8b04-1cecef9f7a5f"
 
-# User identity JSONs (from rbac_users_data.json)
-jdoe_json='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"jdoe","email":"jdoe@redhat.com","first_name":"John","last_name":"Doe","is_active":true,"is_org_admin":true,"is_internal":true,"locale":"en_US","user_id":"12345"}}}'
-alice_json='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"alice","email":"alice@redhat.com","first_name":"Alice","last_name":"TeamA","is_active":true,"is_org_admin":false,"is_internal":true,"locale":"en_US","user_id":"12347"}}}'
-sara_json='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"sara","email":"sara@redhat.com","first_name":"Sara","last_name":"Support","is_active":true,"is_org_admin":false,"is_internal":true,"locale":"en_US","user_id":"12346"}}}'
-bob_json='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"bob","email":"bob@redhat.com","first_name":"Bob","last_name":"TeamB","is_active":true,"is_org_admin":false,"is_internal":true,"locale":"en_US","user_id":"12348"}}}'
+# Simple user identities (working format from our previous sessions)
+jdoe_json='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"jdoe","email":"jdoe@redhat.com","first_name":"John","last_name":"Doe","is_active":true,"is_org_admin":true,"is_internal":true,"locale":"en_US","user_id":"12345","account_number":"1234567890"},"internal":{"org_id":"12345"},"account_number":"1234567890"}}'
+
+alice_json='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"alice","email":"alice@redhat.com","first_name":"Alice","last_name":"TeamA","is_active":true,"is_org_admin":false,"is_internal":true,"locale":"en_US","user_id":"12347","account_number":"1234567890"},"internal":{"org_id":"12345"},"account_number":"1234567890"}}'
+
+sara_json='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"sara","email":"sara@redhat.com","first_name":"Sara","last_name":"Support","is_active":true,"is_org_admin":false,"is_internal":true,"locale":"en_US","user_id":"12346","account_number":"1234567890"},"internal":{"org_id":"12345"},"account_number":"1234567890"}}'
+
+bob_json='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"bob","email":"bob@redhat.com","first_name":"Bob","last_name":"TeamB","is_active":true,"is_org_admin":false,"is_internal":true,"locale":"en_US","user_id":"12348","account_number":"1234567890"},"internal":{"org_id":"12345"},"account_number":"1234567890"}}'
 
 # --- FUNCTIONS ---
 
@@ -45,56 +48,89 @@ list_hosts() {
   echo
 }
 
-# --- PORT FORWARDING SETUP ---
-
-# Function to check if a port is already being forwarded
-is_port_forwarded() {
-  local port="$1"
-  lsof -iTCP:"$port" -sTCP:LISTEN -P | grep -q LISTEN
+create_workspace() {
+  local user_json="$1"
+  local user="$2"
+  local workspace_name="$3"
+  local header
+  header=$(base64_header "$user_json")
+  echo "---- $user: Creating workspace '$workspace_name' ----"
+  curl -s -X POST "$GATEWAY/api/inventory/v1/groups" \
+    -H "accept: application/json" \
+    -H "Content-Type: application/json" \
+    -H "x-rh-identity: $header" \
+    -d "{\"name\":\"$workspace_name\",\"host_ids\":[]}" | jq .
+  echo
 }
 
-# Function to start port-forward if not already running
-start_port_forward() {
-  local pod_name="$1"
-  local local_port="$2"
-  local pod_port="$3"
-  local label="$4"
-
-  if is_port_forwarded "$local_port"; then
-    echo "[INFO] Port $local_port is already being forwarded."
+list_workspaces() {
+  local user_json="$1"
+  local user="$2"
+  local header
+  header=$(base64_header "$user_json")
+  echo "---- $user: Listing workspaces ----"
+  curl -s -o /tmp/workspaces_resp.json -w "%{http_code}" -H "x-rh-identity: $header" -H "Accept: application/json" "$GATEWAY/api/inventory/v1/groups"
+  echo
+  if jq -e '.results' /tmp/workspaces_resp.json >/dev/null 2>&1; then
+    local count=$(jq '.results | length' /tmp/workspaces_resp.json)
+    echo "Workspace count: $count"
+    echo "Workspaces:"
+    jq -r '.results[] | "  - Name: \(.name), ID: \(.id), Host count: \(.host_count // 0)"' /tmp/workspaces_resp.json
   else
-    # Find the pod name
-    pod=$(oc get pods --no-headers -o custom-columns=":metadata.name" -l pod="$pod_name" | grep Running | head -1)
-    if [ -z "$pod" ]; then
-      echo "[ERROR] Could not find running pod for $pod_name."
-      exit 1
-    fi
-    echo "[INFO] Starting port-forward for $label ($pod: $local_port -> $pod_port) ..."
-    oc port-forward pod/$pod $local_port:$pod_port >/dev/null 2>&1 &
-    pf_pid=$!
-    echo $pf_pid > "/tmp/pf_${label}_$local_port.pid"
-    # Wait a moment for port-forward to establish
-    sleep 2
+    cat /tmp/workspaces_resp.json
   fi
+  echo
+}
+
+# --- PORT FORWARDING SETUP ---
+
+setup_port_forwards() {
+  echo "Setting up port forwards..."
+  
+  # Find the main host-inventory service pod (nginx proxy)
+  MAIN_POD=$(oc get pods -l pod=host-inventory-service --no-headers -o custom-columns=":metadata.name" --field-selector=status.phase==Running | head -1)
+  if [[ -z "$MAIN_POD" ]]; then
+    echo "ERROR: Could not find running host-inventory-service pod"
+    exit 1
+  fi
+  
+  # Find the reads service pod
+  READS_POD=$(oc get pods -l pod=host-inventory-service-reads --no-headers -o custom-columns=":metadata.name" --field-selector=status.phase==Running | head -1)
+  if [[ -z "$READS_POD" ]]; then
+    echo "ERROR: Could not find running host-inventory-service-reads pod"
+    exit 1
+  fi
+  
+  echo "Found pods:"
+  echo "  Main service: $MAIN_POD"
+  echo "  Reads service: $READS_POD"
+  
+  # Start port forwards in background
+  echo "Starting port forward for main service (localhost:8001 -> $MAIN_POD:8080)..."
+  oc port-forward pod/$MAIN_POD 8001:8080 >/dev/null 2>&1 &
+  MAIN_PF_PID=$!
+  
+  echo "Starting port forward for reads service (localhost:8002 -> $READS_POD:8000)..."
+  oc port-forward pod/$READS_POD 8002:8000 >/dev/null 2>&1 &
+  READS_PF_PID=$!
+  
+  # Wait for port forwards to establish
+  sleep 3
+  
+  echo "Port forwards established"
 }
 
 # Cleanup function to kill port-forwards
 cleanup_port_forwards() {
-  for pf in /tmp/pf_*_*.pid; do
-    if [ -f "$pf" ]; then
-      pf_pid=$(cat "$pf")
-      kill "$pf_pid" 2>/dev/null || true
-      rm -f "$pf"
-    fi
-  done
+  echo "Cleaning up port forwards..."
+  if [[ -n "${MAIN_PF_PID:-}" ]]; then
+    kill "$MAIN_PF_PID" 2>/dev/null || true
+  fi
+  if [[ -n "${READS_PF_PID:-}" ]]; then
+    kill "$READS_PF_PID" 2>/dev/null || true
+  fi
 }
-trap cleanup_port_forwards EXIT
-
-# # Start port-forwards if needed
-# Need to get port forwarding working with the script itself instead of manually
-
-# start_port_forward "host-inventory-service" 8001 8080 "main"
-# start_port_forward "host-inventory-service-reads" 8002 8000 "reads" 
+trap cleanup_port_forwards EXIT 
 
 assign_host_to_workspace() {
   local user_json="$1"
@@ -114,25 +150,45 @@ assign_host_to_workspace() {
 
 # --- TEST FLOW ---
 
+echo "=== E2E Inventory Test ==="
+
+# Set up port forwarding for both deployed and dev pods
+setup_port_forwards
 
 # Need to replicate the actions taken on the console to test the API
+# 0. List hosts
 # 1. Create a workspace
 # 2. Assign a host to the workspace
 # 3. Get a user view permission for the host in that workspace
 # 3. Check the users visibility, can they or cant they see the host?
 # 4. Repeat the same actions with the Okteto dev pods
 # 5. Check the host visibility, can they or cant they see the host?
-# 6. Repeat the same actions with the Okteto dev pods
-# 7. Check the host visibility, can they or cant they see the host?
 
-# echo "=== Baseline: Deployed Pods ==="
-# list_hosts "$jdoe_json" "jdoe (admin)"
-# list_hosts "$alice_json" "alice (should NOT see hosts)"
-# list_hosts "$sara_json" "sara"
-# list_hosts "$bob_json" "bob (should NOT see hosts)"
+echo "=== Baseline: Deployed Pods ==="
+echo "=== Users should be able to see all hosts ==="
+list_hosts "$jdoe_json" "jdoe (admin)" "$READS_URL"
+list_hosts "$alice_json" "alice" "$READS_URL"
+list_hosts "$sara_json" "sara" "$READS_URL"
+list_hosts "$bob_json" "bob" "$READS_URL"
 
-# # echo "=== Assign Host to Workspace as jdoe ==="
+## Create a new workspace. 
+# create_workspace "$jdoe_identity" "jdoe" "Kessel-Workspace"
+
+# # echo "=== Assign Hosts to Workspace with user identity jdoe ==="
 # # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
+# # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
+# # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
+# # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
+# # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
+
+
+# Modify default permissions to remove host admin permission (meaning they can only see hosts in their workspace)
+
+# Add jdoe and sara to the new workspace
+
+
+# check the host visibility, can they or cant they see the host?
+
 
 # echo "=== After Assignment: Check Host Visibility ==="
 # list_hosts "$jdoe_json" "jdoe (admin)"
@@ -140,11 +196,15 @@ assign_host_to_workspace() {
 # list_hosts "$sara_json" "sara"
 # list_hosts "$bob_json" "bob (should NOT see hosts)"
 
-echo "=== Okteto Dev Pods: Repeat E2E ==="
+
+## Run okteto up commands here
+# echo "=== Okteto Dev Pods: Repeat E2E ==="
 # (Assume you have already switched pods to dev mode and port-forwarded as needed)
-list_hosts "$jdoe_json" "jdoe (admin)" "$READS_URL"
-list_hosts "$alice_json" "alice (should NOT see hosts)" "$READS_URL"
-list_hosts "$sara_json" "sara" "$READS_URL"
-list_hosts "$bob_json" "bob (should NOT see hosts)" "$READS_URL"
+# list_hosts "$jdoe_json" "jdoe (admin)" "$READS_URL"
+# list_hosts "$alice_json" "alice (should NOT see hosts)" "$READS_URL"
+# list_hosts "$sara_json" "sara" "$READS_URL"
+# list_hosts "$bob_json" "bob (should NOT see hosts)" "$READS_URL"
+
+
 
 echo "=== Done ==="
