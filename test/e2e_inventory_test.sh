@@ -6,8 +6,12 @@ set -euo pipefail
 
 # Endpoints
 GATEWAY="http://localhost:8001"
-READS_URL="http://localhost:8002/api/inventory/v1/hosts"
+HOSTS_READS_URL="http://localhost:8002/api/inventory/v1/hosts"
+HOSTS_WRITES_URL="http://localhost:8003/api/inventory/v1/hosts"
 PROXY_URL="$GATEWAY/api/inventory/v1/hosts"
+WORKSPACES_URL="$GATEWAY/api/inventory/v1/groups"
+WORKSPACES_READS_URL="http://localhost:8002/api/inventory/v1/groups"
+WORKSPACES_WRITES_URL="http://localhost:8003/api/inventory/v1/groups"
 
 # Workspace and Host UUIDs (set these to your actual values)
 WORKSPACE_UUID="0197c57c-d458-7372-ac1f-0c981f0536e3"
@@ -52,10 +56,11 @@ create_workspace() {
   local user_json="$1"
   local user="$2"
   local workspace_name="$3"
+  local url="${4:-$WORKSPACES_WRITES_URL}"
   local header
   header=$(base64_header "$user_json")
-  echo "---- $user: Creating workspace '$workspace_name' ----"
-  curl -s -X POST "$GATEWAY/api/inventory/v1/groups" \
+  echo "---- $user: Creating workspace '$workspace_name' at $url ----"
+  curl -s -X POST "$url" \
     -H "accept: application/json" \
     -H "Content-Type: application/json" \
     -H "x-rh-identity: $header" \
@@ -66,10 +71,11 @@ create_workspace() {
 list_workspaces() {
   local user_json="$1"
   local user="$2"
+  local url="${3:-$WORKSPACES_URL}"
   local header
   header=$(base64_header "$user_json")
-  echo "---- $user: Listing workspaces ----"
-  curl -s -o /tmp/workspaces_resp.json -w "%{http_code}" -H "x-rh-identity: $header" -H "Accept: application/json" "$GATEWAY/api/inventory/v1/groups"
+  echo "---- $user: Listing workspaces at $url ----"
+  curl -s -o /tmp/workspaces_resp.json -w "%{http_code}" -H "x-rh-identity: $header" -H "Accept: application/json" "$url"
   echo
   if jq -e '.results' /tmp/workspaces_resp.json >/dev/null 2>&1; then
     local count=$(jq '.results | length' /tmp/workspaces_resp.json)
@@ -101,9 +107,17 @@ setup_port_forwards() {
     exit 1
   fi
   
+  # Find the writes service pod
+  WRITES_POD=$(oc get pods -l pod=host-inventory-service-writes --no-headers -o custom-columns=":metadata.name" --field-selector=status.phase==Running | head -1)
+  if [[ -z "$WRITES_POD" ]]; then
+    echo "ERROR: Could not find running host-inventory-service-writes pod"
+    exit 1
+  fi
+  
   echo "Found pods:"
   echo "  Main service: $MAIN_POD"
   echo "  Reads service: $READS_POD"
+  echo "  Writes service: $WRITES_POD"
   
   # Start port forwards in background
   echo "Starting port forward for main service (localhost:8001 -> $MAIN_POD:8080)..."
@@ -113,6 +127,10 @@ setup_port_forwards() {
   echo "Starting port forward for reads service (localhost:8002 -> $READS_POD:8000)..."
   oc port-forward pod/$READS_POD 8002:8000 >/dev/null 2>&1 &
   READS_PF_PID=$!
+  
+  echo "Starting port forward for writes service (localhost:8003 -> $WRITES_POD:8000)..."
+  oc port-forward pod/$WRITES_POD 8003:8000 >/dev/null 2>&1 &
+  WRITES_PF_PID=$!
   
   # Wait for port forwards to establish
   sleep 3
@@ -129,6 +147,9 @@ cleanup_port_forwards() {
   if [[ -n "${READS_PF_PID:-}" ]]; then
     kill "$READS_PF_PID" 2>/dev/null || true
   fi
+  if [[ -n "${WRITES_PF_PID:-}" ]]; then
+    kill "$WRITES_PF_PID" 2>/dev/null || true
+  fi
 }
 trap cleanup_port_forwards EXIT 
 
@@ -137,10 +158,11 @@ assign_host_to_workspace() {
   local user="$2"
   local workspace_uuid="$3"
   local host_uuid="$4"
+  local base_url="${5:-http://localhost:8003/api/inventory/v1}"
   local header
   header=$(base64_header "$user_json")
   echo "---- $user: Assigning host $host_uuid to workspace $workspace_uuid ----"
-  curl -s -X POST "$GATEWAY/api/inventory/v1/groups/$workspace_uuid/hosts" \
+  curl -s -X POST "$base_url/groups/$workspace_uuid/hosts" \
     -H "accept: application/json" \
     -H "Content-Type: application/json" \
     -H "x-rh-identity: $header" \
@@ -165,22 +187,33 @@ setup_port_forwards
 # 5. Check the host visibility, can they or cant they see the host?
 
 echo "=== Baseline: Deployed Pods ==="
-echo "=== Users should be able to see all hosts ==="
-list_hosts "$jdoe_json" "jdoe (admin)" "$READS_URL"
-list_hosts "$alice_json" "alice" "$READS_URL"
-list_hosts "$sara_json" "sara" "$READS_URL"
-list_hosts "$bob_json" "bob" "$READS_URL"
 
-## Create a new workspace. 
-# create_workspace "$jdoe_identity" "jdoe" "Kessel-Workspace"
+echo "=== Hosts ==="
+list_hosts "$jdoe_json" "jdoe (admin)" "$HOSTS_READS_URL"
+# list_hosts "$alice_json" "alice" "$HOSTS_READS_URL"
+# list_hosts "$sara_json" "sara" "$HOSTS_READS_URL"
+# list_hosts "$bob_json" "bob" "$HOSTS_READS_URL"
 
-# # echo "=== Assign Hosts to Workspace with user identity jdoe ==="
-# # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
-# # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
-# # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
-# # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
-# # assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
+echo "=== Workspaces ==="
+list_workspaces "$jdoe_json" "jdoe (admin)" "$WORKSPACES_READS_URL"
+# list_workspaces "$alice_json" "alice" "$WORKSPACES_READS_URL"
+# list_workspaces "$sara_json" "sara" "$WORKSPACES_READS_URL"
+# list_workspaces "$bob_json" "bob" "$WORKSPACES_READS_URL"
 
+echo "=== Create Workspace ==="
+create_workspace "$jdoe_json" "jdoe" "Test-E2E-Workspace" "$WORKSPACES_WRITES_URL"
+
+echo "=== Workspaces ==="
+list_workspaces "$jdoe_json" "jdoe (admin)" "$WORKSPACES_READS_URL"
+
+# echo "=== Assign Host to Workspace ==="
+# assign_host_to_workspace "$jdoe_json" "jdoe" "$WORKSPACE_UUID" "$HOST_UUID"
+
+echo "=== After Assignment: Check Host Visibility ==="
+list_hosts "$jdoe_json" "jdoe (admin)" "$HOSTS_READS_URL"
+# list_hosts "$alice_json" "alice" "$HOSTS_READS_URL"
+# list_hosts "$sara_json" "sara" "$HOSTS_READS_URL"
+# list_hosts "$bob_json" "bob" "$HOSTS_READS_URL"
 
 # Modify default permissions to remove host admin permission (meaning they can only see hosts in their workspace)
 
