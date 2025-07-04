@@ -110,3 +110,28 @@ Log in to Unleash at `localhost:4242` with the creds:
   -   pass: unleash4all
 e.g. check that the `hbi.api.kessel-workspace-migration` in Unleash is on.
 ```
+
+## Local Development Environment
+
+After deployment, you can develop services locally using Okteto for fast code-reload cycles:
+
+### Prerequisites
+- [Okteto CLI](https://www.okteto.com/docs/get-started/install-okteto-cli/) installed
+- Local clone of [insights-host-inventory](https://github.com/RedHatInsights/insights-host-inventory)
+
+### Usage
+```bash
+# Set your local repo path (required)
+export INSIGHTS_HOST_INVENTORY_REPO_PATH=/path/to/insights-host-inventory
+
+# Start development mode for specific services
+./okteto-dev.sh up host-inventory-service host-inventory-export-service
+
+# Check status
+./okteto-dev.sh check
+
+# Stop development mode
+./okteto-dev.sh down
+```
+
+Development containers sync your local code changes and reload automatically (~2-3 seconds). The script handles ClowdApp reconciliation and deployment scaling automatically.
