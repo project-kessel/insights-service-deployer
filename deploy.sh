@@ -40,7 +40,7 @@ deploy() {
   HBI_CUSTOM_IMAGE_TAG=latest
   HBI_CUSTOM_IMAGE_PARAMETER=""
   LOCAL_SCHEMA_FILE=""
-  
+
   if [ -n "$1" ]; then
     HBI_DEPLOYMENT_TEMPLATE_REF="$1"
   else
@@ -146,6 +146,7 @@ setup_kessel() {
   bonfire deploy kessel -C kessel-inventory --set-image-tag quay.io/redhat-services-prod/project-kessel-tenant/kessel-inventory/inventory-api=latest
 
   setup_sink_connector
+  setup_kessel_inventory_consumer
 }
 
 apply_schema() {
@@ -183,6 +184,11 @@ apply_schema() {
 setup_sink_connector() {
   echo "Relations sink connector is setting up.."
   bonfire deploy kessel -C relations-sink-ephemeral
+}
+
+setup_kessel_inventory_consumer() {
+  echo "Kessel Inventory Consumer is setting up.."
+  bonfire deploy kessel -C kessel-inventory-consumer
 }
 
 download_debezium_configuration() {
@@ -436,7 +442,7 @@ case "$1" in
     ;;
   iqe)
     iqe
-    ;; 
+    ;;
   *)
     usage
     ;;
