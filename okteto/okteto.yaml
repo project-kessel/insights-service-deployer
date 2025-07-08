@@ -1,0 +1,426 @@
+# Multiple development containers for different host-inventory services
+dev:
+  # Main Service (Nginx Proxy)
+  host-inventory-service:
+    image: registry.access.redhat.com/ubi9/nginx-124:latest
+    command: ["nginx", "-g", "daemon off;"]
+    workdir: /opt/app-root/src
+    sync:
+      - ${INSIGHTS_HOST_INVENTORY_REPO_PATH:-/Users/mmclaugh/go/src/github.com/RedHatInsights/insights-host-inventory}:/opt/app-root/src
+    forward:
+      - 8001:8080  # Main service port
+    environment:
+      - CLOWDER_ENABLED=true
+    volumes:
+      - /var/run/secrets
+    securityContext:
+      runAsUser: 1001630000
+      runAsGroup: 1001630000
+      fsGroup: 1001630000
+      runAsNonRoot: true
+
+  # Read-only Service  
+  host-inventory-service-reads:
+    image: quay.io/rarangan/host-inventory:13-Jun
+    command: 
+      - "bash"
+      - "-c"
+      - |
+        export HOME=/tmp
+        export PATH=$HOME/.local/bin:$PATH
+        export PYTHONPATH=$HOME/.local/lib/python3.9/site-packages:$PYTHONPATH
+
+        mkdir -p /tmp/inventory/prometheus /tmp/gunicorn
+
+        # Install debugpy and watchdog if needed
+        pip install --user --no-cache-dir debugpy watchdog
+
+        # Create PYTHONSTARTUP file to inject debugpy
+        cat <<EOF > /tmp/startup_debugpy.py
+        import debugpy
+        debugpy.listen(("0.0.0.0", 9229))
+        print("✅ Debugpy is listening on port 9229")
+        EOF
+
+        export PYTHONSTARTUP=/tmp/startup_debugpy.py
+
+        # Create RestartableUvicornWorker to fix gunicorn reload issue #2339
+        # Using echo commands to avoid YAML heredoc syntax issues
+        echo 'import os' > /tmp/restartable_uvicorn_worker.py
+        echo 'import signal' >> /tmp/restartable_uvicorn_worker.py
+        echo 'import threading' >> /tmp/restartable_uvicorn_worker.py
+        echo 'import time' >> /tmp/restartable_uvicorn_worker.py
+        echo 'from uvicorn.workers import UvicornWorker' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo 'class ReloaderThread(threading.Thread):' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def __init__(self, worker, sleep_interval=1.0):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().__init__()' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self.setDaemon(True)' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._worker = worker' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._interval = sleep_interval' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def run(self):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        while True:' >> /tmp/restartable_uvicorn_worker.py
+        echo '            if not self._worker.alive:' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # Send SIGHUP to master process for graceful worker reload' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # This should be faster than SIGINT to entire process' >> /tmp/restartable_uvicorn_worker.py
+        echo '                master_pid = os.getppid()' >> /tmp/restartable_uvicorn_worker.py
+        echo '                os.kill(master_pid, signal.SIGHUP)' >> /tmp/restartable_uvicorn_worker.py
+        echo '                break  # Exit the monitoring loop after signaling reload' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # Alternative: restart entire process (slower but more thorough)' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # os.kill(os.getpid(), signal.SIGINT)' >> /tmp/restartable_uvicorn_worker.py
+        echo '            time.sleep(self._interval)' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo 'class RestartableUvicornWorker(UvicornWorker):' >> /tmp/restartable_uvicorn_worker.py
+        echo '    CONFIG_KWARGS = {"loop": "uvloop", "http": "httptools"}' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def __init__(self, *args, **kwargs):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().__init__(*args, **kwargs)' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._reloader_thread = ReloaderThread(self)' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def run(self):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        if self.cfg.reload:' >> /tmp/restartable_uvicorn_worker.py
+        echo '            self._reloader_thread.start()' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().run()' >> /tmp/restartable_uvicorn_worker.py
+
+        # Add /tmp to Python path so our custom worker can be imported
+        export PYTHONPATH=/tmp:$PYTHONPATH
+
+        # Run gunicorn with RestartableUvicornWorker (fixes reload issue #2339)
+        exec gunicorn run:app \
+          --reload \
+          --workers=1 \
+          --threads=8 \
+          --limit-request-field_size=16380 \
+          --limit-request-line=8190 \
+          --worker-tmp-dir=/tmp/gunicorn \
+          --log-file=- \
+          --access-logfile=- \
+          --log-level debug \
+          -c gunicorn.conf.py \
+          -b 0.0.0.0:8000 \
+          -t 60 \
+          --worker-class=restartable_uvicorn_worker.RestartableUvicornWorker
+    workdir: /opt/app-root/src
+    sync:
+      - ${INSIGHTS_HOST_INVENTORY_REPO_PATH:-/Users/mmclaugh/go/src/github.com/RedHatInsights/insights-host-inventory}:/opt/app-root/src
+    forward:
+      - 8002:8000  # Reads service port
+      - 9002:9229  # Debug port
+    environment:
+      - LOG_LEVEL=DEBUG
+      - SERVICE_TYPE=READS
+      - CLOWDER_ENABLED=true
+      - INVENTORY_API_USE_READREPLICA=true
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/inventory/prometheus
+    volumes:
+      - /var/run/secrets
+    securityContext:
+      runAsUser: 1001630000
+      runAsGroup: 1001630000
+      fsGroup: 1001630000
+      runAsNonRoot: true
+
+  # Secondary Read Service
+  host-inventory-service-secondary-reads:
+    image: quay.io/rarangan/host-inventory:13-Jun
+    command: 
+      - "bash"
+      - "-c"
+      - |
+        export HOME=/tmp
+        export PATH=$HOME/.local/bin:$PATH
+        export PYTHONPATH=$HOME/.local/lib/python3.9/site-packages:$PYTHONPATH
+
+        mkdir -p /tmp/inventory/prometheus /tmp/gunicorn
+
+        # Install debugpy and watchdog if needed
+        pip install --user --no-cache-dir debugpy watchdog
+
+        # Create PYTHONSTARTUP file to inject debugpy
+        cat <<EOF > /tmp/startup_debugpy.py
+        import debugpy
+        debugpy.listen(("0.0.0.0", 9229))
+        print("✅ Debugpy is listening on port 9229")
+        EOF
+
+        export PYTHONSTARTUP=/tmp/startup_debugpy.py
+
+        # Create RestartableUvicornWorker to fix gunicorn reload issue #2339
+        # Using echo commands to avoid YAML heredoc syntax issues
+        echo 'import os' > /tmp/restartable_uvicorn_worker.py
+        echo 'import signal' >> /tmp/restartable_uvicorn_worker.py
+        echo 'import threading' >> /tmp/restartable_uvicorn_worker.py
+        echo 'import time' >> /tmp/restartable_uvicorn_worker.py
+        echo 'from uvicorn.workers import UvicornWorker' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo 'class ReloaderThread(threading.Thread):' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def __init__(self, worker, sleep_interval=1.0):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().__init__()' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self.setDaemon(True)' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._worker = worker' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._interval = sleep_interval' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def run(self):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        while True:' >> /tmp/restartable_uvicorn_worker.py
+        echo '            if not self._worker.alive:' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # Send SIGHUP to master process for graceful worker reload' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # This should be faster than SIGINT to entire process' >> /tmp/restartable_uvicorn_worker.py
+        echo '                master_pid = os.getppid()' >> /tmp/restartable_uvicorn_worker.py
+        echo '                os.kill(master_pid, signal.SIGHUP)' >> /tmp/restartable_uvicorn_worker.py
+        echo '                break  # Exit the monitoring loop after signaling reload' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # Alternative: restart entire process (slower but more thorough)' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # os.kill(os.getpid(), signal.SIGINT)' >> /tmp/restartable_uvicorn_worker.py
+        echo '            time.sleep(self._interval)' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo 'class RestartableUvicornWorker(UvicornWorker):' >> /tmp/restartable_uvicorn_worker.py
+        echo '    CONFIG_KWARGS = {"loop": "uvloop", "http": "httptools"}' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def __init__(self, *args, **kwargs):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().__init__(*args, **kwargs)' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._reloader_thread = ReloaderThread(self)' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def run(self):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        if self.cfg.reload:' >> /tmp/restartable_uvicorn_worker.py
+        echo '            self._reloader_thread.start()' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().run()' >> /tmp/restartable_uvicorn_worker.py
+
+        # Add /tmp to Python path so our custom worker can be imported
+        export PYTHONPATH=/tmp:$PYTHONPATH
+
+        # Run gunicorn with RestartableUvicornWorker (fixes reload issue #2339)
+        exec gunicorn run:app \
+          --reload \
+          --workers=1 \
+          --threads=8 \
+          --limit-request-field_size=16380 \
+          --limit-request-line=8190 \
+          --worker-tmp-dir=/tmp/gunicorn \
+          --log-file=- \
+          --access-logfile=- \
+          --log-level debug \
+          -c gunicorn.conf.py \
+          -b 0.0.0.0:8000 \
+          -t 60 \
+          --worker-class=restartable_uvicorn_worker.RestartableUvicornWorker
+    workdir: /opt/app-root/src
+    sync:
+      - ${INSIGHTS_HOST_INVENTORY_REPO_PATH:-/Users/mmclaugh/go/src/github.com/RedHatInsights/insights-host-inventory}:/opt/app-root/src
+    forward:
+      - 8003:8000  # Secondary reads service port
+      - 9003:9229  # Debug port
+    environment:
+      - LOG_LEVEL=DEBUG
+      - SERVICE_TYPE=SECONDARY_READS
+      - CLOWDER_ENABLED=true
+      - INVENTORY_API_USE_READREPLICA=true
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/inventory/prometheus
+    volumes:
+      - /var/run/secrets
+    securityContext:
+      runAsUser: 1001630000
+      runAsGroup: 1001630000
+      fsGroup: 1001630000
+      runAsNonRoot: true
+
+  # Write Service
+  host-inventory-service-writes:
+    image: quay.io/rarangan/host-inventory:13-Jun
+    command: 
+      - "bash"
+      - "-c"
+      - |
+        export HOME=/tmp
+        export PATH=$HOME/.local/bin:$PATH
+        export PYTHONPATH=$HOME/.local/lib/python3.9/site-packages:$PYTHONPATH
+
+        mkdir -p /tmp/inventory/prometheus /tmp/gunicorn
+
+        # Install debugpy and watchdog if needed
+        pip install --user --no-cache-dir debugpy watchdog
+
+        # Create PYTHONSTARTUP file to inject debugpy
+        cat <<EOF > /tmp/startup_debugpy.py
+        import debugpy
+        debugpy.listen(("0.0.0.0", 9229))
+        print("✅ Debugpy is listening on port 9229")
+        EOF
+
+        export PYTHONSTARTUP=/tmp/startup_debugpy.py
+
+        # Create RestartableUvicornWorker to fix gunicorn reload issue #2339
+        # Using echo commands to avoid YAML heredoc syntax issues
+        echo 'import os' > /tmp/restartable_uvicorn_worker.py
+        echo 'import signal' >> /tmp/restartable_uvicorn_worker.py
+        echo 'import threading' >> /tmp/restartable_uvicorn_worker.py
+        echo 'import time' >> /tmp/restartable_uvicorn_worker.py
+        echo 'from uvicorn.workers import UvicornWorker' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo 'class ReloaderThread(threading.Thread):' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def __init__(self, worker, sleep_interval=1.0):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().__init__()' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self.setDaemon(True)' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._worker = worker' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._interval = sleep_interval' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def run(self):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        while True:' >> /tmp/restartable_uvicorn_worker.py
+        echo '            if not self._worker.alive:' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # Send SIGHUP to master process for graceful worker reload' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # This should be faster than SIGINT to entire process' >> /tmp/restartable_uvicorn_worker.py
+        echo '                master_pid = os.getppid()' >> /tmp/restartable_uvicorn_worker.py
+        echo '                os.kill(master_pid, signal.SIGHUP)' >> /tmp/restartable_uvicorn_worker.py
+        echo '                break  # Exit the monitoring loop after signaling reload' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # Alternative: restart entire process (slower but more thorough)' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # os.kill(os.getpid(), signal.SIGINT)' >> /tmp/restartable_uvicorn_worker.py
+        echo '            time.sleep(self._interval)' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo 'class RestartableUvicornWorker(UvicornWorker):' >> /tmp/restartable_uvicorn_worker.py
+        echo '    CONFIG_KWARGS = {"loop": "uvloop", "http": "httptools"}' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def __init__(self, *args, **kwargs):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().__init__(*args, **kwargs)' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._reloader_thread = ReloaderThread(self)' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def run(self):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        if self.cfg.reload:' >> /tmp/restartable_uvicorn_worker.py
+        echo '            self._reloader_thread.start()' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().run()' >> /tmp/restartable_uvicorn_worker.py
+
+        # Add /tmp to Python path so our custom worker can be imported
+        export PYTHONPATH=/tmp:$PYTHONPATH
+
+        # Run gunicorn with RestartableUvicornWorker (fixes reload issue #2339)
+        exec gunicorn run:app \
+          --reload \
+          --workers=1 \
+          --threads=8 \
+          --limit-request-field_size=16380 \
+          --limit-request-line=8190 \
+          --worker-tmp-dir=/tmp/gunicorn \
+          --log-file=- \
+          --access-logfile=- \
+          --log-level debug \
+          -c gunicorn.conf.py \
+          -b 0.0.0.0:8000 \
+          -t 60 \
+          --worker-class=restartable_uvicorn_worker.RestartableUvicornWorker
+    workdir: /opt/app-root/src
+    sync:
+      - ${INSIGHTS_HOST_INVENTORY_REPO_PATH:-/Users/mmclaugh/go/src/github.com/RedHatInsights/insights-host-inventory}:/opt/app-root/src
+    forward:
+      - 8004:8000  # Writes service port
+      - 9004:9229  # Debug port
+    environment:
+      - LOG_LEVEL=DEBUG
+      - SERVICE_TYPE=WRITES
+      - CLOWDER_ENABLED=true
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/inventory/prometheus
+    volumes:
+      - /var/run/secrets
+    securityContext:
+      runAsUser: 1001630000
+      runAsGroup: 1001630000
+      fsGroup: 1001630000
+      runAsNonRoot: true
+
+  # Export Service
+  host-inventory-export-service:
+    image: quay.io/rarangan/host-inventory:13-Jun
+    command: 
+      - "bash"
+      - "-c"
+      - |
+        export HOME=/tmp
+        export PATH=$HOME/.local/bin:$PATH
+        export PYTHONPATH=$HOME/.local/lib/python3.9/site-packages:$PYTHONPATH
+
+        mkdir -p /tmp/inventory/prometheus /tmp/gunicorn
+
+        # Install debugpy and watchdog if needed
+        pip install --user --no-cache-dir debugpy watchdog
+
+        # Create PYTHONSTARTUP file to inject debugpy
+        cat <<EOF > /tmp/startup_debugpy.py
+        import debugpy
+        debugpy.listen(("0.0.0.0", 9229))
+        print("✅ Debugpy is listening on port 9229")
+        EOF
+
+        export PYTHONSTARTUP=/tmp/startup_debugpy.py
+
+        # Create RestartableUvicornWorker to fix gunicorn reload issue #2339
+        # Using echo commands to avoid YAML heredoc syntax issues
+        echo 'import os' > /tmp/restartable_uvicorn_worker.py
+        echo 'import signal' >> /tmp/restartable_uvicorn_worker.py
+        echo 'import threading' >> /tmp/restartable_uvicorn_worker.py
+        echo 'import time' >> /tmp/restartable_uvicorn_worker.py
+        echo 'from uvicorn.workers import UvicornWorker' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo 'class ReloaderThread(threading.Thread):' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def __init__(self, worker, sleep_interval=1.0):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().__init__()' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self.setDaemon(True)' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._worker = worker' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._interval = sleep_interval' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def run(self):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        while True:' >> /tmp/restartable_uvicorn_worker.py
+        echo '            if not self._worker.alive:' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # Send SIGHUP to master process for graceful worker reload' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # This should be faster than SIGINT to entire process' >> /tmp/restartable_uvicorn_worker.py
+        echo '                master_pid = os.getppid()' >> /tmp/restartable_uvicorn_worker.py
+        echo '                os.kill(master_pid, signal.SIGHUP)' >> /tmp/restartable_uvicorn_worker.py
+        echo '                break  # Exit the monitoring loop after signaling reload' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # Alternative: restart entire process (slower but more thorough)' >> /tmp/restartable_uvicorn_worker.py
+        echo '                # os.kill(os.getpid(), signal.SIGINT)' >> /tmp/restartable_uvicorn_worker.py
+        echo '            time.sleep(self._interval)' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo 'class RestartableUvicornWorker(UvicornWorker):' >> /tmp/restartable_uvicorn_worker.py
+        echo '    CONFIG_KWARGS = {"loop": "uvloop", "http": "httptools"}' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def __init__(self, *args, **kwargs):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().__init__(*args, **kwargs)' >> /tmp/restartable_uvicorn_worker.py
+        echo '        self._reloader_thread = ReloaderThread(self)' >> /tmp/restartable_uvicorn_worker.py
+        echo '' >> /tmp/restartable_uvicorn_worker.py
+        echo '    def run(self):' >> /tmp/restartable_uvicorn_worker.py
+        echo '        if self.cfg.reload:' >> /tmp/restartable_uvicorn_worker.py
+        echo '            self._reloader_thread.start()' >> /tmp/restartable_uvicorn_worker.py
+        echo '        super().run()' >> /tmp/restartable_uvicorn_worker.py
+
+        # Add /tmp to Python path so our custom worker can be imported
+        export PYTHONPATH=/tmp:$PYTHONPATH
+
+        # Run gunicorn with RestartableUvicornWorker (fixes reload issue #2339)
+        exec gunicorn run:app \
+          --reload \
+          --workers=1 \
+          --threads=8 \
+          --limit-request-field_size=16380 \
+          --limit-request-line=8190 \
+          --worker-tmp-dir=/tmp/gunicorn \
+          --log-file=- \
+          --access-logfile=- \
+          --log-level debug \
+          -c gunicorn.conf.py \
+          -b 0.0.0.0:8000 \
+          -t 60 \
+          --worker-class=restartable_uvicorn_worker.RestartableUvicornWorker
+    workdir: /opt/app-root/src
+    sync:
+      - ${INSIGHTS_HOST_INVENTORY_REPO_PATH:-/Users/mmclaugh/go/src/github.com/RedHatInsights/insights-host-inventory}:/opt/app-root/src
+    forward:
+      - 8005:8000  # Export service port
+      - 9005:9229  # Debug port
+    environment:
+      - LOG_LEVEL=DEBUG
+      - SERVICE_TYPE=EXPORT
+      - CLOWDER_ENABLED=true
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/inventory/prometheus
+    volumes:
+      - /var/run/secrets
+    securityContext:
+      runAsUser: 1001630000
+      runAsGroup: 1001630000
+      fsGroup: 1001630000
+      runAsNonRoot: true
