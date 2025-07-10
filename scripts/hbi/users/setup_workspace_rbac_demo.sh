@@ -2,6 +2,14 @@
 
 set -e
 
+# Detect repository root and set up paths
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../" && pwd)"
+
+# Define paths relative to repository root
+USERS_DIR="$REPO_ROOT/scripts/hbi/users"
+SCRIPTS_DIR="$REPO_ROOT/scripts"
+TEST_DIR="$REPO_ROOT/test/e2e"
+
 echo "🎯 Workspace-Based RBAC Demo Setup"
 echo "==================================="
 echo ""
@@ -11,6 +19,8 @@ echo "  • Leia: 2 hosts in her workspace"
 echo "  • Proper RBAC isolation between users"
 echo "  • Removal of default host permissions"
 echo "  • Comprehensive testing"
+echo ""
+echo "📁 Repository root: $REPO_ROOT"
 echo ""
 
 # Check prerequisites
@@ -50,15 +60,15 @@ cleanup_existing() {
     echo "🧹 Cleaning up any existing setup..."
     
     # Clean up Luke
-    if [[ -f "./teardown_luke.sh" ]]; then
+    if [[ -f "$USERS_DIR/teardown_luke.sh" ]]; then
         echo "   • Cleaning up existing Luke setup..."
-        ./teardown_luke.sh >/dev/null 2>&1 || true
+        (cd "$USERS_DIR" && ./teardown_luke.sh) >/dev/null 2>&1 || true
     fi
     
     # Clean up Leia
-    if [[ -f "./teardown_leia.sh" ]]; then
+    if [[ -f "$USERS_DIR/teardown_leia.sh" ]]; then
         echo "   • Cleaning up existing Leia setup..."
-        ./teardown_leia.sh >/dev/null 2>&1 || true
+        (cd "$USERS_DIR" && ./teardown_leia.sh) >/dev/null 2>&1 || true
     fi
     
     echo "✅ Cleanup completed"
@@ -69,12 +79,12 @@ cleanup_existing() {
 setup_luke() {
     echo "👤 Setting up Luke (4 hosts)..."
     
-    if [[ ! -f "./setup_luke.sh" ]]; then
-        echo "❌ ERROR: setup_luke.sh not found"
+    if [[ ! -f "$USERS_DIR/setup_luke.sh" ]]; then
+        echo "❌ ERROR: setup_luke.sh not found at $USERS_DIR/setup_luke.sh"
         exit 1
     fi
     
-    ./setup_luke.sh
+    (cd "$USERS_DIR" && ./setup_luke.sh)
     
     echo "✅ Luke setup completed"
     echo ""
@@ -84,12 +94,12 @@ setup_luke() {
 setup_leia() {
     echo "👤 Setting up Leia (2 hosts)..."
     
-    if [[ ! -f "./setup_leia.sh" ]]; then
-        echo "❌ ERROR: setup_leia.sh not found"
+    if [[ ! -f "$USERS_DIR/setup_leia.sh" ]]; then
+        echo "❌ ERROR: setup_leia.sh not found at $USERS_DIR/setup_leia.sh"
         exit 1
     fi
     
-    ./setup_leia.sh
+    (cd "$USERS_DIR" && ./setup_leia.sh)
     
     echo "✅ Leia setup completed"
     echo ""
@@ -100,14 +110,14 @@ remove_default_permissions() {
     echo "🔒 Removing default host permissions..."
     echo "   This is CRITICAL for workspace isolation to work properly"
     
-    if [[ ! -f "../../remove_default_host_admin.sh" ]]; then
-        echo "❌ ERROR: remove_default_host_admin.sh not found"
+    if [[ ! -f "$SCRIPTS_DIR/remove_default_host_admin.sh" ]]; then
+        echo "❌ ERROR: remove_default_host_admin.sh not found at $SCRIPTS_DIR/remove_default_host_admin.sh"
         exit 1
     fi
     
     # Run the script and capture output
     echo "   • Executing default permission removal..."
-    ../../remove_default_host_admin.sh > /tmp/default_removal.log 2>&1
+    (cd "$SCRIPTS_DIR" && ./remove_default_host_admin.sh) > /tmp/default_removal.log 2>&1
     
     if [[ $? -eq 0 ]]; then
         echo "   ✅ Default host permissions removed successfully"
@@ -142,13 +152,13 @@ EOF" > /tmp/cache_clear.log 2>&1
 test_luke() {
     echo "🧪 Testing Luke's permissions..."
     
-    if [[ ! -f "../../test/e2e/test_luke_permissions.sh" ]]; then
-        echo "❌ ERROR: test_luke_permissions.sh not found"
+    if [[ ! -f "$TEST_DIR/test_luke_permissions.sh" ]]; then
+        echo "❌ ERROR: test_luke_permissions.sh not found at $TEST_DIR/test_luke_permissions.sh"
         exit 1
     fi
     
     # Run Luke's test
-    if ../../test/e2e/test_luke_permissions.sh > /tmp/luke_test.log 2>&1; then
+    if (cd "$TEST_DIR" && ./test_luke_permissions.sh) > /tmp/luke_test.log 2>&1; then
         # Extract key results
         hosts_count=$(grep "Luke can see" /tmp/luke_test.log | grep -o "[0-9]\+ hosts" | grep -o "[0-9]\+")
         if [[ "$hosts_count" == "4" ]]; then
@@ -167,13 +177,13 @@ test_luke() {
 test_leia() {
     echo "🧪 Testing Leia's permissions..."
     
-    if [[ ! -f "../../test/e2e/test_leia_permissions.sh" ]]; then
-        echo "❌ ERROR: test_leia_permissions.sh not found"
+    if [[ ! -f "$TEST_DIR/test_leia_permissions.sh" ]]; then
+        echo "❌ ERROR: test_leia_permissions.sh not found at $TEST_DIR/test_leia_permissions.sh"
         exit 1
     fi
     
     # Run Leia's test
-    if ../../test/e2e/test_leia_permissions.sh > /tmp/leia_test.log 2>&1; then
+    if (cd "$TEST_DIR" && ./test_leia_permissions.sh) > /tmp/leia_test.log 2>&1; then
         # Extract key results
         hosts_count=$(grep "Leia can see" /tmp/leia_test.log | grep -o "[0-9]\+ hosts" | grep -o "[0-9]\+")
         if [[ "$hosts_count" == "2" ]]; then
@@ -192,11 +202,11 @@ test_leia() {
 debug_rbac() {
     echo "🔍 Debugging RBAC configuration..."
     
-    if [[ -f "./debug_rbac.sh" ]]; then
-        ./debug_rbac.sh > /tmp/rbac_debug.log 2>&1
+    if [[ -f "$USERS_DIR/debug_rbac.sh" ]]; then
+        (cd "$USERS_DIR" && ./debug_rbac.sh) > /tmp/rbac_debug.log 2>&1
         echo "✅ RBAC debug completed (saved to /tmp/rbac_debug.log)"
     else
-        echo "⚠️  debug_rbac.sh not found, skipping debug"
+        echo "⚠️  debug_rbac.sh not found at $USERS_DIR/debug_rbac.sh, skipping debug"
     fi
     
     echo ""
@@ -263,16 +273,16 @@ main() {
         echo "  • Both users can only see their assigned workspace hosts"
         echo ""
         echo "🧪 To test again later:"
-        echo "  • Luke: ../../test/e2e/test_luke_permissions.sh"
-        echo "  • Leia: ../../test/e2e/test_leia_permissions.sh"
+        echo "  • Luke: $TEST_DIR/test_luke_permissions.sh"
+        echo "  • Leia: $TEST_DIR/test_leia_permissions.sh"
         echo ""
         echo "🔧 To debug issues:"
-        echo "  • Run: ./debug_rbac.sh"
+        echo "  • Run: $USERS_DIR/debug_rbac.sh"
         echo "  • Check logs: /tmp/luke_test.log, /tmp/leia_test.log"
         echo ""
         echo "🧹 To clean up:"
-        echo "  • Luke: ./teardown_luke.sh"
-        echo "  • Leia: ./teardown_leia.sh"
+        echo "  • Luke: $USERS_DIR/teardown_luke.sh"
+        echo "  • Leia: $USERS_DIR/teardown_leia.sh"
         echo ""
         echo "📚 Documentation: README.md"
         
@@ -283,12 +293,12 @@ main() {
         echo ""
         echo "🔍 Troubleshooting:"
         echo "  • Check test logs: /tmp/luke_test.log, /tmp/leia_test.log"
-        echo "  • Run debug script: ./debug_rbac.sh"
+        echo "  • Run debug script: $USERS_DIR/debug_rbac.sh"
         echo "  • Check service logs: oc logs -l pod=host-inventory-service-reads"
         echo "  • Verify RBAC service: oc logs -l pod=rbac-service"
         echo ""
         echo "🧹 To clean up and retry:"
-        echo "  • ./teardown_luke.sh && ./teardown_leia.sh"
+        echo "  • $USERS_DIR/teardown_luke.sh && $USERS_DIR/teardown_leia.sh"
         echo "  • Then run this script again"
         
         return 1

@@ -48,7 +48,7 @@ trap cleanup_port_forward EXIT
 setup_port_forward
 
 # Leia's user identity
-LEIA_JSON='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"leia","email":"leia@redhat.com","first_name":"Leia","last_name":"Johnson","is_active":true,"is_org_admin":false,"is_internal":true,"locale":"en_US","user_id":"12351","account_number":"1234567890"},"internal":{"org_id":"12345"},"account_number":"1234567890"}}'
+LEIA_JSON='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"leia","email":"leia@redhat.com","first_name":"Leia","last_name":"Johnson","is_active":true,"is_org_admin":false,"is_internal":false,"locale":"en_US","user_id":"12351","account_number":"1234567890"},"internal":{"org_id":"12345"},"account_number":"1234567890"}}'
 
 # Function to encode user JSON to base64
 base64_header() {

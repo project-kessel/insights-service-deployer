@@ -48,7 +48,7 @@ trap cleanup_port_forward EXIT
 setup_port_forward
 
 # Luke's user identity
-LUKE_JSON='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"luke","email":"luke@redhat.com","first_name":"Luke","last_name":"Smith","is_active":true,"is_org_admin":false,"is_internal":true,"locale":"en_US","user_id":"12350","account_number":"1234567890"},"internal":{"org_id":"12345"},"account_number":"1234567890"}}'
+LUKE_JSON='{"identity":{"org_id":"12345","type":"User","auth_type":"basic-auth","user":{"username":"luke","email":"luke@redhat.com","first_name":"Luke","last_name":"Smith","is_active":true,"is_org_admin":false,"is_internal":false,"locale":"en_US","user_id":"12350","account_number":"1234567890"},"internal":{"org_id":"12345"},"account_number":"1234567890"}}'
 
 # Function to encode user JSON to base64
 base64_header() {
