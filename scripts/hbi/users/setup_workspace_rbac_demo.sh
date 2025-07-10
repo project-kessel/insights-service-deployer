@@ -100,22 +100,39 @@ remove_default_permissions() {
     echo "🔒 Removing default host permissions..."
     echo "   This is CRITICAL for workspace isolation to work properly"
     
-    if [[ ! -f "../remove_default_host_admin.sh" ]]; then
+    if [[ ! -f "../../remove_default_host_admin.sh" ]]; then
         echo "❌ ERROR: remove_default_host_admin.sh not found"
         exit 1
     fi
     
     # Run the script and capture output
     echo "   • Executing default permission removal..."
-    ../remove_default_host_admin.sh > /tmp/default_removal.log 2>&1
+    ../../remove_default_host_admin.sh > /tmp/default_removal.log 2>&1
     
-    # Check if it was successful
-    if grep -q "SUCCESS: No host permissions in default roles" /tmp/default_removal.log; then
-        echo "✅ Default host permissions removed successfully"
+    if [[ $? -eq 0 ]]; then
+        echo "   ✅ Default host permissions removed successfully"
     else
-        echo "❌ ERROR: Failed to remove default host permissions"
-        echo "   Check /tmp/default_removal.log for details"
+        echo "   ❌ Failed to remove default permissions"
+        cat /tmp/default_removal.log
         exit 1
+    fi
+    
+    # Clear RBAC cache to ensure changes take effect
+    echo "   • Clearing RBAC cache..."
+    oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- bash -c "./rbac/manage.py shell << 'EOF'
+from django.core.cache import cache
+try:
+    cache.clear()
+    print('RBAC cache cleared successfully')
+except Exception as e:
+    print(f'Error clearing cache: {e}')
+exit()
+EOF" > /tmp/cache_clear.log 2>&1
+    
+    if [[ $? -eq 0 ]]; then
+        echo "   ✅ RBAC cache cleared successfully"
+    else
+        echo "   ⚠️  Warning: Failed to clear RBAC cache (permissions may take time to update)"
     fi
     
     echo ""

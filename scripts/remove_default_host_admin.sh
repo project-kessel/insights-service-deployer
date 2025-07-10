@@ -58,6 +58,7 @@ remove_default_host_admin() {
     
     echo "Using RBAC pod: $rbac_pod"
     
+    # Remove permissions
     oc exec "$rbac_pod" -- bash -c "./rbac/manage.py shell << 'EOFPYTHON'
 from management.models import Principal, Role, Policy, Group, Access, Permission, ResourceDefinition
 from django.db import transaction
@@ -200,6 +201,19 @@ except Exception as e:
 exit()
 EOFPYTHON" 2>/dev/null
 
+    # Clear RBAC cache to ensure changes take effect immediately
+    echo ""
+    echo "🔄 Clearing RBAC cache to ensure changes take effect..."
+    oc exec "$rbac_pod" -- bash -c "./rbac/manage.py shell << 'EOFPYTHON'
+from django.core.cache import cache
+try:
+    cache.clear()
+    print('✅ RBAC cache cleared successfully')
+except Exception as e:
+    print(f'❌ Error clearing cache: {e}')
+exit()
+EOFPYTHON" 2>/dev/null
+    
     echo "✅ Default host permissions removal completed"
 }
 

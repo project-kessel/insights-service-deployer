@@ -15,7 +15,7 @@ The workspace-based RBAC system ensures that users can only see hosts that belon
 
 - OpenShift cluster access with appropriate permissions
 - RBAC service and Host Inventory service running
-- At least 20 hosts in the system for testing
+- At least 10 hosts in the system for testing
 
 ## 🚀 Quick Start
 

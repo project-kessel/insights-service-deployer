@@ -59,7 +59,7 @@ deploy() {
   fi
 
   HOST_FRONTEND_GIT_COMMIT=$(echo $(git ls-remote https://github.com/RedHatInsights/insights-inventory-frontend HEAD) | cut -d ' ' -f1 | cut -c1-7)
-  bonfire deploy host-inventory -F true -p host-inventory/RBAC_V2_FORCE_ORG_ADMIN=true \
+  bonfire deploy host-inventory -F true -p host-inventory/RBAC_V2_FORCE_ORG_ADMIN=false \
   -p host-inventory/URLLIB3_LOG_LEVEL=WARN \
   --ref-env insights-stage \
   --set-template-ref host-inventory="$HBI_DEPLOYMENT_TEMPLATE_REF"  \
