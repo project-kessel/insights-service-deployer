@@ -210,17 +210,16 @@ The host inventory service uses ResourceDefinitions to filter results:
 #### RBAC permissions not updating after configuration changes
 - **Cause**: Stale RBAC cache holding old permissions
 - **Solution**: Clear RBAC cache and restart HBI service:
-  ```bash
-  # Clear RBAC cache
-  oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- ./rbac/manage.py shell -c "
-  from django.core.cache import cache
-  cache.clear()
-  print('RBAC cache cleared successfully')
-  "
-  
-  # Restart HBI service
+```bash
+oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- ./rbac/manage.py shell -c "
+from django.core.cache import cache
+cache.clear()
+print('RBAC cache cleared successfully')
+"
+```
+```bash  
   oc rollout restart deployment/host-inventory-service-reads
-  ```
+```
 
 #### 500 Internal Server Error
 - **Cause**: ResourceDefinition stored as JSON string instead of dict
