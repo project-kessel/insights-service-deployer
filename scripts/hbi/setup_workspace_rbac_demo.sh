@@ -129,15 +129,11 @@ remove_default_permissions() {
     
     # Clear RBAC cache to ensure changes take effect
     echo "   • Clearing RBAC cache..."
-    oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- bash -c "./rbac/manage.py shell << 'EOF'
+    oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- ./rbac/manage.py shell -c "
 from django.core.cache import cache
-try:
-    cache.clear()
-    print('RBAC cache cleared successfully')
-except Exception as e:
-    print(f'Error clearing cache: {e}')
-exit()
-EOF" > /tmp/cache_clear.log 2>&1
+cache.clear()
+print('RBAC cache cleared successfully')
+" > /tmp/cache_clear.log 2>&1
     
     if [[ $? -eq 0 ]]; then
         echo "   ✅ RBAC cache cleared successfully"
@@ -231,9 +227,25 @@ main() {
     remove_default_permissions
     
     # Step 5: Debug RBAC (optional)
-    debug_rbac
+    #debug_rbac
     
-    # Step 6: Test permissions
+    # Step 6: Clear cache one final time before testing
+    echo "🔄 Clearing RBAC cache to ensure fresh permissions..."
+    oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- ./rbac/manage.py shell -c "
+from django.core.cache import cache
+cache.clear()
+print('RBAC cache cleared successfully')
+"
+    
+    # Restart HBI service to ensure it picks up fresh permissions
+    echo "🔄 Restarting Host Inventory service..."
+    oc rollout restart deployment/host-inventory-service-reads
+    oc rollout status deployment/host-inventory-service-reads --timeout=120s
+    
+    echo "✅ Services refreshed with clean permissions"
+    echo ""
+    
+    # Step 7: Test permissions
     echo "🧪 Testing workspace-based permissions..."
     echo ""
     

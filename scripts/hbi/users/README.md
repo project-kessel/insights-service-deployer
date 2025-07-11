@@ -24,7 +24,7 @@ The workspace-based RBAC system ensures that users can only see hosts that belon
 Run the complete setup for both Luke and Leia:
 
 ```bash
-./setup_workspace_rbac_demo.sh
+../setup_workspace_rbac_demo.sh
 ```
 
 This script will:
@@ -49,7 +49,7 @@ This script will:
 
 ```bash
 # This must be done AFTER setting up users but BEFORE testing
-../remove_default_host_admin.sh
+./remove_default_host_admin.sh
 ```
 
 #### Step 3: Test the setup
@@ -65,19 +65,17 @@ This script will:
 ## 📁 File Structure
 
 ```
-scripts/hbi/users/
-├── README.md                           # This documentation
+scripts/hbi/
 ├── setup_workspace_rbac_demo.sh        # Complete automated setup
-├── setup_luke.sh                       # Luke setup (4 hosts)
-├── setup_leia.sh                       # Leia setup (2 hosts)
-├── teardown_luke.sh                    # Luke cleanup
-├── teardown_leia.sh                    # Leia cleanup
-├── debug_rbac.sh                       # RBAC debugging tool
-├── _helpers.sh                         # Shared helper functions
-└── setup_luke_demo.sh                  # Original Luke demo script
-
-scripts/
-└── remove_default_host_admin.sh        # Remove default host permissions
+├── restore_default_host_admin.sh       # Restore default host permissions
+├── teardown_demo_users.sh              # Clean up all demo users
+└── users/
+    ├── README.md                       # This documentation
+    ├── setup_luke.sh                   # Luke setup (4 hosts)
+    ├── setup_leia.sh                   # Leia setup (2 hosts)
+    ├── remove_default_host_admin.sh    # Remove default host permissions
+    ├── teardown_luke.sh                # Luke cleanup
+    └── teardown_leia.sh                # Leia cleanup
 
 test/e2e/
 ├── test_luke_permissions.sh            # Luke permission tests
@@ -119,13 +117,29 @@ test/e2e/
 - Confirms all hosts are in Leia's workspace
 - Tests workspace access permissions
 
-### Debugging Tools
+### Permission Management
 
-#### `debug_rbac.sh`
-- Analyzes RBAC configuration for Luke and Leia
-- Shows group memberships, policies, and ResourceDefinitions
-- Checks default access group configuration
-- Helps troubleshoot permission issues
+#### `remove_default_host_admin.sh`
+- Removes default host permissions from system roles
+- Essential for workspace isolation to work
+- Must be run after setting up users
+
+### Parent Directory Scripts
+
+#### `../setup_workspace_rbac_demo.sh`
+- Complete automated setup for both Luke and Leia
+- Handles all steps including permission removal and testing
+- Recommended for new users
+
+#### `../restore_default_host_admin.sh`
+- Restores default host permissions to system roles
+- Use with caution - removes workspace isolation
+- Opposite of `remove_default_host_admin.sh`
+
+#### `../teardown_demo_users.sh`
+- Removes all demo users (Luke and Leia)
+- Cleans up all RBAC configurations
+- Comprehensive cleanup for the entire demo
 
 ## 🎯 Expected Results
 
@@ -191,7 +205,22 @@ The host inventory service uses ResourceDefinitions to filter results:
 
 #### Users see all hosts instead of workspace hosts
 - **Cause**: Default host permissions not removed
-- **Solution**: Run `../remove_default_host_admin.sh`
+- **Solution**: Run `./remove_default_host_admin.sh`
+
+#### RBAC permissions not updating after configuration changes
+- **Cause**: Stale RBAC cache holding old permissions
+- **Solution**: Clear RBAC cache and restart HBI service:
+  ```bash
+  # Clear RBAC cache
+  oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- ./rbac/manage.py shell -c "
+  from django.core.cache import cache
+  cache.clear()
+  print('RBAC cache cleared successfully')
+  "
+  
+  # Restart HBI service
+  oc rollout restart deployment/host-inventory-service-reads
+  ```
 
 #### 500 Internal Server Error
 - **Cause**: ResourceDefinition stored as JSON string instead of dict
@@ -199,14 +228,14 @@ The host inventory service uses ResourceDefinitions to filter results:
 
 #### Users see no hosts
 - **Cause**: Workspace UUID mismatch in ResourceDefinitions
-- **Solution**: Run `debug_rbac.sh` to check configuration
+- **Solution**: Check RBAC service logs and verify workspace UUIDs match in database
 
 ## 🧪 Testing
 
 ### Automated Testing
 ```bash
-# Test both users
-./setup_workspace_rbac_demo.sh
+# Test both users (complete setup)
+../setup_workspace_rbac_demo.sh
 
 # Test individual users
 ../../test/e2e/test_luke_permissions.sh
@@ -215,12 +244,12 @@ The host inventory service uses ResourceDefinitions to filter results:
 
 ### Manual Testing
 ```bash
-# Check RBAC configuration
-./debug_rbac.sh
-
 # Test API access directly
 curl -H "x-rh-identity: $(echo '{"identity":{"account_number":"0000001","type":"User","user":{"username":"luke","email":"luke@example.com","first_name":"Luke","last_name":"Skywalker","is_active":true,"is_org_admin":false,"is_internal":false,"locale":"en_US","user_id":"12350"},"internal":{"org_id":"000001"}}' | base64 -w 0)" \
   "http://localhost:8002/api/inventory/v1/hosts"
+
+# Check RBAC service logs for permission evaluation
+oc logs -l pod=rbac-service --tail=50
 ```
 
 ## 🔄 Cleanup
@@ -231,10 +260,14 @@ curl -H "x-rh-identity: $(echo '{"identity":{"account_number":"0000001","type":"
 ./teardown_leia.sh
 ```
 
+### Remove all demo users
+```bash
+../teardown_demo_users.sh
+```
+
 ### Restore default permissions (if needed)
 ```bash
-# You'll need to manually add inventory:hosts:read back to default roles
-# This is intentionally not automated for security reasons
+../restore_default_host_admin.sh
 ```
 
 ## 📊 Architecture
@@ -250,15 +283,19 @@ User Request → RBAC Service → ResourceDefinition Filter → Host Inventory �
 
 ### Debug Commands
 ```bash
-# Check RBAC configuration
-./debug_rbac.sh
-
 # Check service logs
-oc logs -l pod=host-inventory-service-reads
-oc logs -l pod=rbac-service
+oc logs -l pod=host-inventory-service-reads --tail=50
+oc logs -l pod=rbac-service --tail=50
 
 # Check environment variables
 oc exec $(oc get pods -l pod=host-inventory-service-reads -o name | head -1) -- env | grep RBAC
+
+# Check RBAC configuration in database
+oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- ./rbac/manage.py shell -c "
+from management.models import Principal, Policy, ResourceDefinition
+luke = Principal.objects.get(username='luke')
+print('Luke policies:', [p.name for p in Policy.objects.filter(group__principals=luke)])
+"
 ```
 
 ### Common Environment Issues
@@ -268,9 +305,8 @@ oc exec $(oc get pods -l pod=host-inventory-service-reads -o name | head -1) -- 
 
 ## 📚 Additional Resources
 
-- [Original Luke Demo Script](./setup_luke_demo.sh) - Reference implementation
-- [Helper Functions](./_helpers.sh) - Shared utilities
 - [RBAC Service Documentation](../../../docs/) - Detailed RBAC information
+- [Host Inventory Service](../../../insights-host-inventory/) - HBI service documentation
 
 ---
 
