@@ -91,7 +91,8 @@ idmsvc" \
   --set-image-tag quay.io/redhat-services-prod/hcc-platex-services/chrome-service=latest \
   --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac=latest \
   -p host-inventory/BYPASS_RBAC=false \
-  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest
+  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest \
+  -p host-inventory/API_CACHE_TIMEOUT=5
 
   setup_debezium
   apply_schema "$LOCAL_SCHEMA_FILE"

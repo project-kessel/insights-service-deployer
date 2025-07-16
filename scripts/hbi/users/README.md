@@ -1,181 +1,152 @@
-# Workspace-Based RBAC Setup for Host Inventory
+# RBAC Multi-Tenant Demo: Alice & Bob Workspace Isolation
 
-This directory contains scripts to set up workspace-based RBAC (Role-Based Access Control) for the Host Inventory service, allowing users to access only hosts within their assigned workspaces.
+This demo showcases **Role-Based Access Control (RBAC)** with **workspace isolation** using Alice and Bob as example users. Each user is restricted to only see hosts within their assigned workspace, demonstrating true multi-tenant security.
 
-## 🎯 Overview
+## 🎯 Demo Overview
 
-The workspace-based RBAC system ensures that users can only see hosts that belong to their assigned workspaces, providing proper data isolation and security. This is achieved by:
+### What This Demo Shows
+- **Multi-tenant RBAC**: Each user sees only their assigned hosts
+- **Workspace Isolation**: Alice and Bob have separate, isolated workspaces
+- **Permission Enforcement**: RBAC filtering prevents cross-workspace access
+- **Dynamic Host Assignment**: Hosts are automatically assigned to user workspaces
 
-1. Creating users with limited permissions
-2. Setting up workspaces with specific hosts
-3. Configuring RBAC policies with ResourceDefinitions that restrict access to workspace UUIDs
-4. Removing default host permissions to enforce workspace restrictions
-
-## 📋 Prerequisites
-
-- OpenShift cluster access with appropriate permissions
-- RBAC service and Host Inventory service running
-- At least 10 hosts in the system for testing
+### Demo Users
+| User  | User ID | Host Count | Workspace Purpose |
+|-------|---------|------------|-------------------|
+| Alice | 12347   | 4 hosts    | Team-A workspace  |
+| Bob   | 12348   | 2 hosts    | TeamB workspace   |
 
 ## 🚀 Quick Start
 
-### Option 1: Automated Setup (Recommended)
+### Prerequisites
+- Deployed ephemeral environment with RBAC and Host Inventory services
+- OpenShift CLI (`oc`) logged in and configured
+- `jq` installed for JSON processing
 
-Run the complete setup for both Luke and Leia:
-
+### 1. Run the Complete Demo
 ```bash
-../setup_workspace_rbac_demo.sh
+# Set up both Alice and Bob workspaces
+./scripts/hbi/users/setup_alice.sh && ./scripts/hbi/users/setup_bob.sh
+
+# Remove default permissions to enforce isolation
+./scripts/hbi/remove_default_host_admin.sh
+
+# Test both users' permissions
+./test/e2e/test_alice_permissions.sh
+./test/e2e/test_bob_permissions.sh
 ```
 
-This script will:
-- Set up Luke with 4 hosts in his workspace
-- Set up Leia with 2 hosts in her workspace  
-- Remove default host permissions
-- Test both users' access
+### 2. Expected Results
+✅ **Alice**: Can see exactly **4 hosts** in her workspace  
+✅ **Bob**: Can see exactly **2 hosts** in his workspace  
+✅ **Isolation**: Neither user can see the other's hosts  
+✅ **RBAC**: Permission filtering works correctly  
 
-### Option 2: Manual Setup
+## 📋 Detailed Workflow
 
-#### Step 1: Set up individual users
+### Phase 1: Environment Setup
+The demo assumes an ephemeral environment is already deployed with:
+- 10 sample hosts created via Kafka ingestion
+- Users seeded from `rbac_users_data.json` (jdoe, sara, alice, bob)
+- All services running (RBAC, Host Inventory, SpiceDB)
 
+### Phase 2: Alice Workspace Setup
 ```bash
-# Set up Luke (4 hosts)
-./setup_luke.sh
-
-# Set up Leia (2 hosts)
-./setup_leia.sh
+./scripts/hbi/users/setup_alice.sh
 ```
 
-#### Step 2: Remove default permissions (CRITICAL)
+**What it does:**
+1. **Host Selection**: Selects first 4 available hosts from inventory
+2. **Workspace Creation**: Creates `alice-workspace-{timestamp}` with 4 hosts
+3. **RBAC Configuration**: 
+   - Creates `alice-limited-group` 
+   - Creates `Alice Limited Viewer` role with `inventory:hosts:read` and `inventory:groups:read`
+   - Creates `alice-limited-policy` linking group and role
+   - Creates ResourceDefinitions restricting access to Alice's workspace UUID
 
+**Expected Output:**
+```
+✅ Alice's workspace created: 0198148a-a103-74e3-b9e7-413c73754a67
+✅ 4 hosts assigned to Alice's workspace
+✅ RBAC permissions configured for Alice
+```
+
+### Phase 3: Bob Workspace Setup
 ```bash
-# This must be done AFTER setting up users but BEFORE testing
-./remove_default_host_admin.sh
+./scripts/hbi/users/setup_bob.sh
 ```
 
-#### Step 3: Test the setup
+**What it does:**
+1. **Host Selection**: Selects hosts 5-6 (or last 2 available) from inventory
+2. **Workspace Creation**: Creates `bob-workspace-{timestamp}` with 2 hosts
+3. **RBAC Configuration**: 
+   - Creates `bob-limited-group`
+   - Creates `Bob Limited Viewer` role with inventory permissions
+   - Creates `bob-limited-policy` linking group and role
+   - Creates ResourceDefinitions restricting access to Bob's workspace UUID
 
+**Expected Output:**
+```
+✅ Bob's workspace created: 0198148b-0fe8-7aa2-a48d-f5151e24fa45
+✅ 2 hosts assigned to Bob's workspace
+✅ Bob's RBAC setup completed successfully
+```
+
+### Phase 4: Remove Default Permissions
 ```bash
-# Test Luke's permissions
-../../test/e2e/test_luke_permissions.sh
-
-# Test Leia's permissions  
-../../test/e2e/test_leia_permissions.sh
+./scripts/hbi/remove_default_host_admin.sh
 ```
 
-## 📁 File Structure
+**Critical Step**: This completely removes the `Inventory Hosts Administrator` role that gives all users default access to all hosts. Without this step, users would see ALL hosts instead of just their workspace hosts.
 
-```
-scripts/hbi/
-├── setup_workspace_rbac_demo.sh        # Complete automated setup
-├── restore_default_host_admin.sh       # Restore default host permissions
-├── teardown_demo_users.sh              # Clean up all demo users
-└── users/
-    ├── README.md                       # This documentation
-    ├── setup_luke.sh                   # Luke setup (4 hosts)
-    ├── setup_leia.sh                   # Leia setup (2 hosts)
-    ├── remove_default_host_admin.sh    # Remove default host permissions
-    ├── teardown_luke.sh                # Luke cleanup
-    └── teardown_leia.sh                # Leia cleanup
+**What it does:**
+1. Finds the `Inventory Hosts Administrator` role
+2. Removes it from all policies and groups
+3. Deletes all associated Access objects and ResourceDefinitions
+4. Deletes the role completely
 
-test/e2e/
-├── test_luke_permissions.sh            # Luke permission tests
-└── test_leia_permissions.sh            # Leia permission tests
+### Phase 5: Permission Testing
+```bash
+./test/e2e/test_alice_permissions.sh
+./test/e2e/test_bob_permissions.sh
 ```
 
-## 🔧 Individual Scripts
+**Alice Test Results:**
+```
+📊 Alice can see 4 hosts
+✅ PASS: Alice sees exactly 4 hosts (as expected)
+✅ Alice can access her workspace
+✅ RBAC filtering is working correctly
+```
 
-### User Setup Scripts
+**Bob Test Results:**
+```
+📊 Bob can see 2 hosts  
+✅ PASS: Bob sees exactly 2 hosts (as expected)
+✅ Bob can access his workspace
+✅ RBAC filtering is working correctly
+```
 
-#### `setup_luke.sh`
-- Creates Luke user (ID: 12350) with limited permissions
-- Creates Luke's workspace with 4 hosts
-- Sets up RBAC group, role, policy, and ResourceDefinitions
-- Workspace: `luke-workspace-{timestamp}`
+## 🔧 Technical Details
 
-#### `setup_leia.sh`
-- Creates Leia user (ID: 12351) with limited permissions
-- Creates Leia's workspace with 2 hosts
-- Sets up RBAC group, role, policy, and ResourceDefinitions
-- Workspace: `leia-workspace-{timestamp}`
+### RBAC Architecture
+```
+User (Alice/Bob)
+    ↓
+Group (alice-limited-group/bob-limited-group)
+    ↓  
+Policy (alice-limited-policy/bob-limited-policy)
+    ↓
+Role (Alice Limited Viewer/Bob Limited Viewer)
+    ↓
+Access (inventory:hosts:read, inventory:groups:read)
+    ↓
+ResourceDefinition (workspace UUID restriction)
+```
 
-### Cleanup Scripts
+### Key Components
 
-#### `teardown_luke.sh` / `teardown_leia.sh`
-- Removes user, group, role, policy, and ResourceDefinitions
-- Deletes workspace and host assignments
-- Cleans up all RBAC configurations
-
-### Testing Scripts
-
-#### `test_luke_permissions.sh`
-- Verifies Luke can see exactly 4 hosts
-- Confirms all hosts are in Luke's workspace
-- Tests workspace access permissions
-
-#### `test_leia_permissions.sh`
-- Verifies Leia can see exactly 2 hosts
-- Confirms all hosts are in Leia's workspace
-- Tests workspace access permissions
-
-### Permission Management
-
-#### `remove_default_host_admin.sh`
-- Removes default host permissions from system roles
-- Essential for workspace isolation to work
-- Must be run after setting up users
-
-### Parent Directory Scripts
-
-#### `../setup_workspace_rbac_demo.sh`
-- Complete automated setup for both Luke and Leia
-- Handles all steps including permission removal and testing
-- Recommended for new users
-
-#### `../restore_default_host_admin.sh`
-- Restores default host permissions to system roles
-- Use with caution - removes workspace isolation
-- Opposite of `remove_default_host_admin.sh`
-
-#### `../teardown_demo_users.sh`
-- Removes all demo users (Luke and Leia)
-- Cleans up all RBAC configurations
-- Comprehensive cleanup for the entire demo
-
-## 🎯 Expected Results
-
-After successful setup:
-
-### Luke's Access
-- **Hosts visible**: 4 (from his workspace)
-- **Workspace**: `luke-workspace-{timestamp}`
-- **Permissions**: `inventory:hosts:read`, `inventory:groups:read`
-- **Restrictions**: Can only see hosts in his workspace UUID
-
-### Leia's Access
-- **Hosts visible**: 2 (from her workspace)
-- **Workspace**: `leia-workspace-{timestamp}`
-- **Permissions**: `inventory:hosts:read`, `inventory:groups:read`
-- **Restrictions**: Can only see hosts in her workspace UUID
-
-## 🔍 How It Works
-
-### 1. User Creation
-- Users are created in RBAC with `is_org_admin: false`
-- Each user gets a unique user ID and tenant assignment
-
-### 2. Workspace Creation
-- Workspaces are created with unique names and UUIDs
-- Specific hosts are assigned to each workspace
-- Workspace UUIDs become the group IDs for RBAC filtering
-
-### 3. RBAC Configuration
-- **Group**: User-specific group (e.g., `luke-limited-group`)
-- **Role**: Limited viewer role with specific permissions
-- **Policy**: Links the group to the role
-- **ResourceDefinitions**: Restrict access using `group.id` filter with workspace UUID
-
-### 4. Permission Filtering
-The host inventory service uses ResourceDefinitions to filter results:
+**ResourceDefinitions**: The critical component that enforces workspace isolation
 ```json
 {
   "key": "group.id",
@@ -184,129 +155,181 @@ The host inventory service uses ResourceDefinitions to filter results:
 }
 ```
 
-### 5. Default Permission Removal
-- Removes `inventory:hosts:*` permissions from all default roles
-- Ensures users need explicit workspace permissions
-- Prevents privilege escalation through default groups
+**Workspace Assignment**: Hosts are moved from "Ungrouped" to user-specific workspaces via the Groups API
 
-## 🚨 Important Notes
+**Cache Management**: RBAC cache is automatically invalidated when permissions change
 
-### Critical Setup Order
-1. ✅ Set up users and workspaces first
-2. ✅ Remove default host permissions LAST
-3. ✅ Test after removing default permissions
+### API Endpoints Used
+- `GET /api/inventory/v1/hosts` - Host listing with RBAC filtering
+- `GET /api/inventory/v1/groups` - Workspace listing  
+- `POST /api/inventory/v1/groups` - Workspace creation with host assignment
 
-### ResourceDefinition Format
-- Must be stored as a **dictionary object**, not JSON string
-- Uses `attributeFilter` with `key`, `operation`, and `value` fields
-- The `value` array contains workspace UUIDs
-
-### Common Issues
-
-#### Users see all hosts instead of workspace hosts
-- **Cause**: Default host permissions not removed
-- **Solution**: Run `./remove_default_host_admin.sh`
-
-#### RBAC permissions not updating after configuration changes
-- **Cause**: Stale RBAC cache holding old permissions
-- **Solution**: Clear RBAC cache and restart HBI service:
-```bash
-oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- ./rbac/manage.py shell -c "
-from django.core.cache import cache
-cache.clear()
-print('RBAC cache cleared successfully')
-"
-```
-```bash  
-  oc rollout restart deployment/host-inventory-service-reads
-```
-
-#### 500 Internal Server Error
-- **Cause**: ResourceDefinition stored as JSON string instead of dict
-- **Solution**: Recreate user with correct ResourceDefinition format
-
-#### Users see no hosts
-- **Cause**: Workspace UUID mismatch in ResourceDefinitions
-- **Solution**: Check RBAC service logs and verify workspace UUIDs match in database
-
-## 🧪 Testing
-
-### Automated Testing
-```bash
-# Test both users (complete setup)
-../setup_workspace_rbac_demo.sh
-
-# Test individual users
-../../test/e2e/test_luke_permissions.sh
-../../test/e2e/test_leia_permissions.sh
-```
+## 🧪 Testing and Verification
 
 ### Manual Testing
 ```bash
-# Test API access directly
-curl -H "x-rh-identity: $(echo '{"identity":{"account_number":"0000001","type":"User","user":{"username":"luke","email":"luke@example.com","first_name":"Luke","last_name":"Skywalker","is_active":true,"is_org_admin":false,"is_internal":false,"locale":"en_US","user_id":"12350"},"internal":{"org_id":"000001"}}' | base64 -w 0)" \
-  "http://localhost:8002/api/inventory/v1/hosts"
+# Test Alice's access
+curl -H "x-rh-identity: $(echo '{"identity":{"user":{"username":"alice","user_id":"12347"},...}}' | base64 -w 0)" \
+     http://localhost:8002/api/inventory/v1/hosts
 
-# Check RBAC service logs for permission evaluation
-oc logs -l pod=rbac-service --tail=50
+# Test Bob's access  
+curl -H "x-rh-identity: $(echo '{"identity":{"user":{"username":"bob","user_id":"12348"},...}}' | base64 -w 0)" \
+     http://localhost:8002/api/inventory/v1/hosts
 ```
 
-## 🔄 Cleanup
+### Verification Points
+✅ Alice sees only her 4 workspace hosts  
+✅ Bob sees only his 2 workspace hosts  
+✅ Neither user can see ungrouped hosts  
+✅ Neither user can see the other's workspace  
+✅ Host counts match workspace assignments  
+✅ RBAC cache invalidation works correctly  
 
-### Remove individual users
+## 🔄 Cleanup and Reset
+
+### Automated Teardown Scripts
+The easiest way to clean up the demo is using the dedicated teardown scripts:
+
 ```bash
-./teardown_luke.sh
-./teardown_leia.sh
+# Remove Alice's complete setup
+./scripts/hbi/users/teardown_alice.sh
+
+# Remove Bob's complete setup  
+./scripts/hbi/users/teardown_bob.sh
+
+# Remove both users
+./scripts/hbi/users/teardown_alice.sh && ./scripts/hbi/users/teardown_bob.sh
 ```
 
-### Remove all demo users
+**What the teardown scripts do:**
+- ✅ Remove all RBAC objects (groups, policies, roles, access, resource definitions)
+- ✅ Delete user workspaces and return hosts to "Ungrouped" status  
+- ✅ Verify cleanup and test that users have no special permissions
+- ✅ Provide detailed summary of what was removed
+
+### Manual Cleanup (Advanced)
 ```bash
-../teardown_demo_users.sh
+# Remove Alice's setup manually
+oc exec $(oc get pods -l pod=rbac-service -o name) -- \
+  ./rbac/manage.py shell -c "
+from management.models import *
+Policy.objects.filter(name='alice-limited-policy').delete()
+Group.objects.filter(name='alice-limited-group').delete()  
+Role.objects.filter(name='Alice Limited Viewer').delete()"
+
+# Remove Bob's setup (similar commands)
 ```
 
-### Restore default permissions (if needed)
+### Restore Default Permissions
 ```bash
-../restore_default_host_admin.sh
+./scripts/hbi/add_inventory_admin_role.sh
 ```
 
-## 📊 Architecture
+### Complete Demo Reset
+```bash
+# Full teardown and reset sequence
+./scripts/hbi/users/teardown_alice.sh && ./scripts/hbi/users/teardown_bob.sh
+./scripts/hbi/add_inventory_admin_role.sh
 
-```
-User Request → RBAC Service → ResourceDefinition Filter → Host Inventory → Workspace Hosts
-     ↓              ↓                    ↓                      ↓              ↓
-   Luke         luke-limited-      group.id filter        Filtered by      Only Luke's
-               group + policy      workspace UUID         workspace        4 hosts
+# Verify all users can see all hosts again
+./test/e2e/test_alice_permissions.sh  # Should see all hosts or get error
+./test/e2e/test_bob_permissions.sh    # Should see all hosts or get error
 ```
 
-## 🛠️ Troubleshooting
+## 📊 Expected Demo Flow Timeline
+
+1. **Environment Deploy** (5-10 minutes)
+2. **Alice Setup** (~30 seconds)
+3. **Bob Setup** (~30 seconds)  
+4. **Remove Default Permissions** (~15 seconds)
+5. **Permission Tests** (~30 seconds)
+6. **Total Demo Time**: ~2 minutes for workspace setup + testing
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+**"User sees all hosts instead of workspace hosts"**
+- Ensure `remove_default_host_admin.sh` was run
+- Check that ResourceDefinitions were created correctly
+- Verify RBAC cache was invalidated
+
+**"Workspace creation failed"**
+- Verify hosts exist and are accessible  
+- Check port forwarding is working
+- Ensure admin user (jdoe) has proper permissions
+
+**"Permission test fails"**
+- Wait 10-15 seconds for RBAC cache propagation
+- Verify workspace UUIDs match in RBAC ResourceDefinitions
+- Check that hosts were actually moved to workspaces
 
 ### Debug Commands
 ```bash
-# Check service logs
-oc logs -l pod=host-inventory-service-reads --tail=50
-oc logs -l pod=rbac-service --tail=50
+# Check Alice's RBAC setup
+oc exec $(oc get pods -l pod=rbac-service -o name) -- \
+  ./rbac/manage.py shell -c "
+from management.models import *
+alice = Principal.objects.get(username='alice')
+print('Groups:', [g.name for g in Group.objects.filter(principals=alice)])
+print('Policies:', [p.name for p in Policy.objects.filter(group__principals=alice)])"
 
-# Check environment variables
-oc exec $(oc get pods -l pod=host-inventory-service-reads -o name | head -1) -- env | grep RBAC
-
-# Check RBAC configuration in database
-oc exec $(oc get pods -l pod=rbac-service -o name | head -1) -- ./rbac/manage.py shell -c "
-from management.models import Principal, Policy, ResourceDefinition
-luke = Principal.objects.get(username='luke')
-print('Luke policies:', [p.name for p in Policy.objects.filter(group__principals=luke)])
-"
+# Check workspace assignments
+curl -H "x-rh-identity: $JDOE_HEADER" http://localhost:8002/api/inventory/v1/groups
 ```
 
-### Common Environment Issues
-- Ensure `BYPASS_RBAC=false`
-- Check that RBAC service is running
-- Verify port forwarding is working
+## 🎉 Success Criteria
 
-## 📚 Additional Resources
+The demo is successful when:
+✅ Alice sees exactly 4 hosts  
+✅ Bob sees exactly 2 hosts  
+✅ No cross-workspace access occurs  
+✅ RBAC filtering works correctly  
+✅ Workspace isolation is enforced  
 
-- [RBAC Service Documentation](../../../docs/) - Detailed RBAC information
-- [Host Inventory Service](../../../insights-host-inventory/) - HBI service documentation
+This demonstrates a **production-ready multi-tenant RBAC system** with proper workspace isolation and permission enforcement.
 
----
+## 📚 Quick Reference
 
-**Note**: This system provides true workspace-based isolation. Users can only access hosts within their assigned workspaces, ensuring proper data security and multi-tenancy. 
+### Complete Demo Lifecycle
+```bash
+# 1. Setup both users
+./scripts/hbi/users/setup_alice.sh && ./scripts/hbi/users/setup_bob.sh
+
+# 2. Remove default permissions to enforce isolation  
+./scripts/hbi/remove_default_host_admin.sh
+
+# 3. Test permissions
+./test/e2e/test_alice_permissions.sh && ./test/e2e/test_bob_permissions.sh
+
+# 4. Teardown when done
+./scripts/hbi/users/teardown_alice.sh && ./scripts/hbi/users/teardown_bob.sh
+
+# 5. Restore default permissions (optional)
+./scripts/hbi/add_inventory_admin_role.sh
+```
+
+### Individual User Management
+```bash
+# Alice only
+./scripts/hbi/users/setup_alice.sh          # Setup
+./test/e2e/test_alice_permissions.sh        # Test
+./scripts/hbi/users/teardown_alice.sh       # Cleanup
+
+# Bob only  
+./scripts/hbi/users/setup_bob.sh            # Setup
+./test/e2e/test_bob_permissions.sh          # Test
+./scripts/hbi/users/teardown_bob.sh         # Cleanup
+```
+
+### Available Scripts
+| Script | Purpose | Expected Result |
+|--------|---------|-----------------|
+| `setup_alice.sh` | Create Alice + 4-host workspace | Alice sees 4 hosts |
+| `setup_bob.sh` | Create Bob + 2-host workspace | Bob sees 2 hosts |
+| `teardown_alice.sh` | Remove Alice's setup | Alice sees 0 hosts |
+| `teardown_bob.sh` | Remove Bob's setup | Bob sees 0 hosts |
+| `test_alice_permissions.sh` | Test Alice's access | Reports host/workspace count |
+| `test_bob_permissions.sh` | Test Bob's access | Reports host/workspace count |
+| `remove_default_host_admin.sh` | Remove default permissions | Enforces workspace isolation |
+| `add_inventory_admin_role.sh` | Restore default permissions | All users see all hosts | 
