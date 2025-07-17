@@ -1,0 +1,75 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: kafka-connectors
+objects:
+- apiVersion: kafka.strimzi.io/v1beta2
+  kind: KafkaConnector
+  metadata:
+    name: hbi-migration-connector
+    annotations:
+      strimzi.io/use-connector-resources: "true"
+    labels:
+      strimzi.io/cluster: ${KAFKA_CONNECT_INSTANCE}
+  spec:
+    state: stopped
+    class: io.debezium.connector.postgresql.PostgresConnector
+    tasksMax: ${{MAX_TASKS}}
+    config:
+      slot.name: debezium_hosts
+      signal.enabled.channels: "source,kafka"
+      signal.kafka.topic: "host-inventory.signal"
+      signal.kafka.bootstrap.servers: "${ENV_NAME}-kafka-bootstrap:9092"
+      signal.data.collection: "hbi.signal"
+      snapshot.mode: "no_data"
+      database.server.name: host-inventory-db
+      database.dbname: ${secrets:host-inventory-db:db.name}
+      database.hostname: ${secrets:host-inventory-db:db.host}
+      database.port: ${secrets:host-inventory-db:db.port}
+      database.user: ${secrets:host-inventory-db:db.user}
+      database.password: ${secrets:host-inventory-db:db.password}
+      topic.prefix: host-inventory
+      table.whitelist: hbi.hosts
+      table.include.list: hbi.hosts
+      plugin.name: pgoutput
+      heartbeat.interval.ms: ${DEBEZIUM_HEARTBEAT_INTERVAL_MS}
+      heartbeat.action.query: ${DEBEZIUM_ACTION_QUERY}
+      topic.heartbeat.prefix: ${TOPIC_HEARTBEAT_PREFIX}
+      # Transform configurations
+      transforms: "unwrap,addMetadata,addHeaders,fieldFilter"
+      # Extract new record state (flatten envelope)
+      transforms.unwrap.type: "io.debezium.transforms.ExtractNewRecordState"
+      transforms.unwrap.drop.tombstones: "false"
+      transforms.unwrap.delete.handling.mode: "rewrite"
+      # Add source metadata to payload
+      transforms.addMetadata.type: "org.apache.kafka.connect.transforms.InsertField$Value"
+      transforms.addMetadata.static.field: "source_system"
+      transforms.addMetadata.static.value: "host-inventory-db"
+      # Add static headers
+      transforms.addHeaders.type: "org.apache.kafka.connect.transforms.InsertHeader"
+      transforms.addHeaders.header: "operation"
+      transforms.addHeaders.value.literal: "migration"
+      # Filter and rename fields
+      transforms.fieldFilter.type: "org.apache.kafka.connect.transforms.ReplaceField$Value"
+      transforms.fieldFilter.exclude: "deletion_timestamp,facts,last_check_in,modified_on,per_reporter_staleness,stale_timestamp,stale_warning_timestamp,tags,tags_alt"
+      transforms.fieldFilter.renames: "display_name:hostname,org_id:organization_id"
+      
+parameters:
+- name: ENV_NAME
+  description: ClowdEnvironment name (ephemeral, stage, prod)
+  required: true
+- name: KAFKA_CONNECT_INSTANCE
+  value: kessel-kafka-connect
+  description: Name of the target Kafka Connect instance for Connector
+- name: MAX_TASKS
+  value: "1"
+  description: How many tasks the Kafka Connect instance can create to process this Connector's work
+- name: TOPIC_HEARTBEAT_PREFIX
+  value: debezium-heartbeat
+  description: Prefix for the connector heartbeat topic
+- name: DEBEZIUM_ACTION_QUERY
+  value: "SELECT pg_logical_emit_message(false, 'heartbeat', now()::varchar);"
+  description: Query action that runs for each heartbeat event
+- name: DEBEZIUM_HEARTBEAT_INTERVAL_MS
+  value: "300000"
+  description: The interval for the Debezium heartbeat in ms
