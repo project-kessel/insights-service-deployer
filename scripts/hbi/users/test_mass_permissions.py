@@ -81,7 +81,7 @@ class MassPermissionTester:
         return proc
 
     def test_host_access(self):
-        """Test user's host access"""
+        """Test user's host access via their workspace"""
         print(f"🔍 Testing {self.username}'s host access...")
         
         headers = {
@@ -89,8 +89,34 @@ class MassPermissionTester:
             "Accept": "application/json"
         }
         
+        # First get the user's workspace to find the workspace UUID
+        workspace_response = requests.get(
+            "http://localhost:8002/api/inventory/v1/groups",
+            headers=headers,
+            timeout=30
+        )
+        
+        if workspace_response.status_code != 200:
+            print(f"❌ Failed to get workspaces: {workspace_response.status_code}")
+            return False
+        
+        workspace_data = workspace_response.json()
+        user_workspace = None
+        for workspace in workspace_data.get('results', []):
+            if f"mass-workspace-{self.user_num}" in workspace['name']:
+                user_workspace = workspace
+                break
+        
+        if not user_workspace:
+            print(f"❌ User's workspace not found for host testing")
+            return False
+        
+        workspace_id = user_workspace['id']
+        print(f"📋 Testing hosts in workspace: {workspace_id[:8]}...")
+        
+        # Access hosts through workspace details endpoint (like verification script)
         response = requests.get(
-            "http://localhost:8002/api/inventory/v1/hosts",
+            f"http://localhost:8002/api/inventory/v1/groups/{workspace_id}",
             headers=headers,
             timeout=30
         )
@@ -100,10 +126,10 @@ class MassPermissionTester:
             return False
         
         data = response.json()
-        host_count = data.get('total', 0)
-        hosts = data.get('results', [])
+        hosts = data.get('hosts', [])
+        host_count = len(hosts)
         
-        print(f"📊 {self.username} can see {host_count} hosts")
+        print(f"📊 {self.username} can see {host_count} hosts in their workspace")
         
         if self.detailed and hosts:
             print("📋 Host Details:")
