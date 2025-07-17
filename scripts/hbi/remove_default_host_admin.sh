@@ -247,8 +247,6 @@ print_summary() {
     echo "  • Test that new users don't have unauthorized host access"
     echo ""
     echo "🧪 To test user access:"
-    echo "   ./test/e2e/test_luke_permissions.sh"
-    echo "   ./test/e2e/test_leia_permissions.sh"
     echo "   ./test/e2e/test_sara_permissions.sh"
     echo ""
     echo "🔄 To restore the role (if needed):"
