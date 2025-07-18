@@ -200,6 +200,95 @@ wait_for_rollout() {
     fi
 }
 
+# Check for port conflicts that would cause okteto SSH tunnel failures
+check_port_conflicts() {
+    # Allow bypass for advanced users
+    if [[ "${OKTETO_SKIP_PORT_CHECK:-}" == "true" ]]; then
+        warn "⚠️  Port conflict check bypassed"
+        return 0
+    fi
+
+    log "🔎 Dynamically checking for port conflicts based on okteto.template.yaml..."
+
+    if [[ ! -f "okteto/okteto.template.yaml" ]]; then
+        warn "⚠️  okteto/okteto.template.yaml not found. Skipping dynamic port check."
+        return
+    fi
+
+    # Dynamically extract local ports from the forward section of the okteto template
+    local conflict_ports
+    conflict_ports=($(grep -E '^\s*-\s*[0-9]+:[0-9]+' okteto/okteto.template.yaml | sed -e 's/^\s*-\s*//' -e 's/:.*//' | sort -u))
+
+    if [[ ${#conflict_ports[@]} -eq 0 ]]; then
+        log "✅ No ports to check in okteto.template.yaml."
+        return
+    fi
+    
+    log "   Ports to check: ${conflict_ports[*]}"
+
+    local ports_in_use=()
+    for port in "${conflict_ports[@]}"; do
+        if command -v lsof >/dev/null 2>&1 && lsof -i ":$port" >/dev/null 2>&1; then
+            ports_in_use+=("$port")
+        elif command -v ss >/dev/null 2>&1 && ss -ln | grep -q ":$port "; then
+            ports_in_use+=("$port")
+        elif command -v netstat >/dev/null 2>&1 && netstat -ln | grep -q ":$port "; then
+            ports_in_use+=("$port")
+        fi
+    done
+
+    if [[ ${#ports_in_use[@]} -gt 0 ]]; then
+        error "❌ Port conflicts detected that will cause okteto SSH tunnel failures:"
+        for port in "${ports_in_use[@]}"; do
+            if command -v lsof >/dev/null 2>&1; then
+                local process
+                process=$(lsof -i ":$port" 2>/dev/null | tail -1 | awk '{print $1, $2}')
+                error "   Port $port is occupied by: $process"
+            else
+                error "   Port $port is occupied"
+            fi
+        done
+        error ""
+        error "🔧 To fix: Stop the processes using these ports"
+        error "   Most common fix: pkill -f 'port-forward'"
+        error "   Or set: OKTETO_SKIP_PORT_CHECK=true (if you know what you're doing)"
+        exit 1
+    fi
+    
+    log "✅ No port conflicts detected."
+}
+
+# Ensure we're not running on production/stage clusters
+check_cluster_safety() {
+    # Allow bypass with warning
+    if [[ "${OKTETO_SKIP_CLUSTER_SAFETY_CHECK:-}" == "true" ]]; then
+        warn "🚨 Cluster safety check bypassed - ensure this is not production!"
+        return 0
+    fi
+    
+    local namespace=$(oc project -q 2>/dev/null || echo "")
+    local cluster=$(oc config current-context 2>/dev/null || echo "")
+    
+    # Block obvious production/stage environments
+    if [[ "$namespace" == *"prod"* ]] || [[ "$namespace" == *"stage"* ]] || 
+       [[ "$cluster" == *"prod"* ]] || [[ "$cluster" == *"stage"* ]]; then
+        error "🚨 SAFETY: Okteto development blocked on production/stage environment"
+        error "   Namespace: $namespace"
+        error "   Cluster: $cluster"
+        error ""
+        error "❌ This could replace production deployments with development code!"
+        error "🔧 Switch to an ephemeral cluster for development"
+        exit 1
+    fi
+    
+    # Warn if not clearly ephemeral
+    if [[ "$namespace" != *"ephemeral"* ]] && [[ "$cluster" != *"ephemeral"* ]]; then
+        warn "⚠️  Not clearly an ephemeral environment:"
+        warn "   Namespace: $namespace"
+        warn "   Cluster: $cluster"
+        warn "   Set OKTETO_SKIP_CLUSTER_SAFETY_CHECK=true if this is safe"
+    fi
+}
 
 
 # Main okteto commands
@@ -690,6 +779,19 @@ ClowdApp Management:
   This script automatically manages ClowdApp reconciliation to ensure proper
   deployment scaling. ClowdApp is disabled during development and re-enabled
   when development stops.
+
+Safety Features:
+  • Port conflict detection for common dev ports (8080, 8443, 9229, 5005, etc.)
+  • Production/stage cluster protection
+  
+Environment Variables:
+  INSIGHTS_HOST_INVENTORY_REPO_PATH  # Required: Path to your local repo
+  OKTETO_SKIP_PORT_CHECK=true        # Skip port conflict check  
+  OKTETO_SKIP_CLUSTER_SAFETY_CHECK=true  # Skip cluster safety check
+
+Troubleshooting:
+  Port conflicts: pkill -f 'port-forward'
+  Wrong cluster: Switch to ephemeral environment
 EOF
 }
 
@@ -740,6 +842,12 @@ main() {
         error "Please verify the path exists and contains your insights-host-inventory repository"
         exit 1
     fi
+    
+    # Check if common ports are in use (Okteto typically uses these for SSH tunnels)
+    check_port_conflicts
+
+    # Check if we're running on a safe (ephemeral) cluster
+    check_cluster_safety
     
     # Handle commands
     case "${1:-up}" in
