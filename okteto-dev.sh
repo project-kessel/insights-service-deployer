@@ -240,32 +240,40 @@ okteto_up() {
         exit 1
     fi
     
-    if [[ -n "$service" ]]; then
-        # Validate the service exists in our list
-        if [[ ! " ${DEFAULT_SERVICES[*]} " =~ " ${service} " ]]; then
-            error "Invalid service: $service"
-            error "Available services: ${DEFAULT_SERVICES[*]}"
-            exit 1
-        fi
-        
-        if [[ "$daemon_mode" == "true" ]]; then
-            log "Starting development for service: $service (daemon mode)"
-        else
-            log "Starting development for service: $service"
-        fi
-        
-        # Check if this specific service is already active
-        if oc get deployment "${service}-okteto" >/dev/null 2>&1; then
-            log "Service $service already in development mode (idempotent)"
-            return 0
-        fi
+    if [[ -z "$service" ]]; then
+        warn "Sorry! Interactive service selection has been disabled to ensure reliable customizations."
+        warn ""
+        warn "Please specify a service name directly:"
+        warn "  Usage: $0 up [options] <service>"
+        warn ""
+        warn "Available services:"
+        for service_name in "${DEFAULT_SERVICES[@]}"; do
+            warn "  • $service_name"
+        done
+        warn ""
+        warn "Example: $0 up host-inventory-service-reads"
+        warn ""
+        warn "💡 This change ensures deployment customizations are always applied correctly!"
+        exit 1
+    fi
+    
+    # Validate the service exists in our list
+    if [[ ! " ${DEFAULT_SERVICES[*]} " =~ " ${service} " ]]; then
+        error "Invalid service: $service"
+        error "Available services: ${DEFAULT_SERVICES[*]}"
+        exit 1
+    fi
+    
+    if [[ "$daemon_mode" == "true" ]]; then
+        log "Starting development for service: $service (daemon mode)"
     else
-        if [[ "$daemon_mode" == "true" ]]; then
-            error "Daemon mode (-d) requires a specific service name"
-            error "Interactive service selection is not supported in daemon mode"
-            exit 1
-        fi
-        log "Starting okteto (interactive service selection)"
+        log "Starting development for service: $service"
+    fi
+    
+    # Check if this specific service is already active
+    if oc get deployment "${service}-okteto" >/dev/null 2>&1; then
+        log "Service $service already in development mode (idempotent)"
+        return 0
     fi
     
     # Disable ClowdApp reconciliation before starting development
@@ -276,10 +284,8 @@ okteto_up() {
         log "ClowdApp reconciliation already disabled"
     fi
     
-    # Customize deployment for service if necessary (should NOT be necessary)
-    if [[ -n "$service" ]]; then
-        scripts/customize_deployments.sh "$service" up
-    fi
+    # Apply customizations for the specified service
+    scripts/customize_deployments.sh "$service" up
     
     # Update okteto.yaml with current namespace SCC settings and image info
     local namespace uid_range uid_start image_full image_name image_tag
@@ -333,11 +339,7 @@ okteto_up() {
         fi
     else
         # Normal mode: run in foreground
-        if [[ -n "$service" ]]; then
-            okteto up --file okteto/okteto.yaml --namespace "$namespace" "$service"
-        else
-            okteto up --file okteto/okteto.yaml --namespace "$namespace"
-        fi
+        okteto up --file okteto/okteto.yaml --namespace "$namespace" "$service"
     fi
 }
 
@@ -637,9 +639,8 @@ Configuration:
   Current: $CLOWDAPP_NAME
 
 Commands:
-  up [options] [service] - Start development for one service
-                          No service: interactive selection
-                          With service: start that specific service
+  up [options] <service> - Start development for one service
+                          Service name is required
                           Options:
                             -d  Start in daemon mode (background)
                             -w  Wait for rollout completion (requires -d)
