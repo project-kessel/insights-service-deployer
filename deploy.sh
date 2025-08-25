@@ -21,8 +21,8 @@ login() {
 
 check_bonfire_namespace() {
   NAMESPACE=`oc project -q 2>/dev/null || true`
-  if [[ -z $NAMESPACE ]]; then
-    echo "No bonfire namespace set, reserving a namespace for you now (duration 10hr)..."
+  if [[ -z $NAMESPACE || "${NAMESPACE}" == "default" ]]; then
+    echo "No bonfire namespace set or using 'default', reserving a namespace for you now (duration 10hr)..."
     bonfire namespace reserve --duration 10h
   fi
 }
@@ -43,7 +43,7 @@ deploy() {
   HBI_CUSTOM_IMAGE_TAG=latest
   HBI_CUSTOM_IMAGE_PARAMETER=""
   LOCAL_SCHEMA_FILE=""
-  
+
   if [ -n "$1" ]; then
     HBI_DEPLOYMENT_TEMPLATE_REF="$1"
   else
@@ -69,7 +69,7 @@ deploy() {
   -p rbac/MEMORY_LIMIT=512Mi \
   -p rbac/MEMORY_REQUEST=256Mi \
   -p rbac/V2_APIS_ENABLED=True -p rbac/V2_READ_ONLY_API_MODE=False -p rbac/V2_BOOTSTRAP_TENANT=True \
-  -p rbac/REPLICATION_TO_RELATION_ENABLED=True -p rbac/BYPASS_BOP_VERIFICATION=True \
+  -p rbac/REPLICATION_TO_RELATION_ENABLED=True \
   -p rbac/KAFKA_ENABLED=False -p rbac/NOTIFICATONS_ENABLED=False \
   -p rbac/NOTIFICATIONS_RH_ENABLED=False \
   -p rbac/ROLE_CREATE_ALLOW_LIST="remediations,\
@@ -90,6 +90,7 @@ idmsvc" \
   -p rbac/V2_MIGRATION_RESOURCE_EXCLUDE_LIST="empty-exclude-list" \
   -p host-inventory/KESSEL_TARGET_URL=kessel-inventory-api.$NAMESPACE.svc.cluster.local:9000 \
   --set-image-tag "${HBI_CUSTOM_IMAGE}=${HBI_CUSTOM_IMAGE_TAG}" \
+  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/service-accounts="e187df2" \
   --set-image-tag quay.io/cloudservices/insights-inventory-frontend="${HOST_FRONTEND_GIT_COMMIT}" \
   --set-image-tag quay.io/redhat-services-prod/hcc-platex-services/chrome-service=latest \
   --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac=latest \
@@ -97,12 +98,15 @@ idmsvc" \
   --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest \
   --set-image-tag quay.io/cloudservices/unleash-proxy=latest \
   --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/service-accounts=latest \
+  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest
 
-  setup_debezium
+
+  setup_rbac_debezium
   apply_schema "$LOCAL_SCHEMA_FILE"
 }
 
-setup_debezium() {
+
+setup_rbac_debezium() {
   echo "Debezium is setting up.."
   download_debezium_configuration
 
@@ -188,6 +192,11 @@ apply_schema() {
 setup_sink_connector() {
   echo "Relations sink connector is setting up.."
   bonfire deploy kessel -C relations-sink-ephemeral
+}
+
+setup_kessel_inventory_consumer() {
+  echo "Kessel Inventory Consumer is setting up.."
+  bonfire deploy kessel -C kessel-inventory-consumer
 }
 
 download_debezium_configuration() {
@@ -316,8 +325,8 @@ deploy_unleash_importer_image() {
   # Starts the job that runs the unleash feature flag import
   bonfire deploy rhsm --timeout=1800 --optional-deps-method none \
     --frontends false --no-remove-resources app:rhsm \
-    -C rhsm -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE="$UNLEASH_IMAGE" \
-    -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE_TAG="$UNLEASH_TAG" 
+    -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE="$UNLEASH_IMAGE" \
+    -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE_TAG="$UNLEASH_TAG"
 }
 
 add_hosts_to_hbi() {
@@ -349,6 +358,58 @@ add_hosts_to_hbi() {
   done
   AFTER_COUNT=$(oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"select count(*) from hbi.hosts;\"" | head -3 | tail -1 | tr -d '[:space:]')
   echo "Done. [AFTER_COUNT: ${AFTER_COUNT}, TARGET_COUNT: ${TARGET_COUNT}]"
+}
+
+create_hbi_connectors() {
+  echo "Creating HBI debezium connectors..."
+  NAMESPACE=env-$(oc project -q)
+  oc process -f https://raw.githubusercontent.com/project-kessel/kessel-kafka-connect/refs/heads/main/deploy/sp-connectors/hbi-hosts-migration-connector.yml \
+    -p KAFKA_CONNECT_INSTANCE="kessel-kafka-connect" \
+    -p ENV_NAME="$NAMESPACE" \
+    -p BOOTSTRAP_SERVERS="${NAMESPACE}-kafka-bootstrap:9092" \
+    -p DB_SECRET_NAME="host-inventory-db" | oc apply -f -
+
+  oc process -f https://raw.githubusercontent.com/project-kessel/kessel-kafka-connect/refs/heads/main/deploy/sp-connectors/hbi-outbox-connector.yml \
+    -p KAFKA_CONNECT_INSTANCE="kessel-kafka-connect" \
+    -p DB_SECRET_NAME="host-inventory-db" | oc apply -f -
+}
+
+# TODO: remove this once we have a proper outbox table in the hbi db (RHINENG-19194)
+create_hbi_tables() {
+  echo "Creating outbox and signal tables in host-inventory-db hbi schema..."
+
+  HOST_INVENTORY_DB_POD=$(oc get pods -l app=host-inventory,service=db,sub=local_db --no-headers -o custom-columns=":metadata.name" --field-selector=status.phase==Running | head -1)
+
+  if [ -z "$HOST_INVENTORY_DB_POD" ]; then
+    echo "Error: Could not find host-inventory database pod"
+    exit 1
+  fi
+
+  echo "Using database pod: $HOST_INVENTORY_DB_POD"
+
+  # Create hbi schema if it doesn't exist
+  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"CREATE SCHEMA IF NOT EXISTS hbi;\""
+
+  # Create outbox table
+  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"CREATE TABLE IF NOT EXISTS hbi.outbox (
+    id uuid NOT NULL,
+    aggregatetype character varying(255) NOT NULL,
+    aggregateid character varying(255) NOT NULL,
+    operation character varying(255) NOT NULL,
+    version character varying(255) NOT NULL,
+    payload jsonb
+  );\""
+
+  # Create signal table
+  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"CREATE TABLE IF NOT EXISTS hbi.signal (
+    id VARCHAR(255) PRIMARY KEY,
+    type VARCHAR(255) NOT NULL,
+    data VARCHAR(255) NULL
+  );\""
+
+  # Verify the tables were created
+  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"\\d hbi.outbox\""
+  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"\\d hbi.signal\""
 }
 
 add_users() {
@@ -386,6 +447,8 @@ usage() {
   echo "  deploy_unleash_importer_image      Deploy unleash importer"
   echo "  add_hosts_to_hbi [org_id] [count]  Add test hosts to HBI"
   echo "  add_users                          Add test users"
+  echo "  host-replication-tables            Create outbox and signal tables in host-inventory-db hbi schema"
+  echo "  host-replication-kafka             Set up host replication kafka connectors/consumers"
   echo ""
   echo "Deploy Options:"
   echo "  template_ref    Git ref for host-inventory deploy template (default: latest commit)"
@@ -426,8 +489,8 @@ case "$1" in
   clean_download_debezium_configuration)
     clean_download_debezium_configuration
     ;;
-  setup_debezium)
-    setup_debezium
+  setup_rbac_debezium)
+    setup_rbac_debezium
     ;;
   add_hosts_to_hbi)
     # $2 is ORG_ID, $3 is the number of hosts to add
@@ -439,9 +502,16 @@ case "$1" in
   deploy_unleash_importer_image)
     deploy_unleash_importer_image
     ;;
+  host-replication-tables)
+    create_hbi_tables
+    ;;
+  host-replication-kafka)
+    setup_kessel_inventory_consumer
+    create_hbi_connectors
+    ;;
   iqe)
     iqe
-    ;; 
+    ;;
   *)
     usage
     ;;

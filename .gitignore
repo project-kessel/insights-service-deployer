@@ -95,7 +95,9 @@ venv.bak/
 Thumbs.db
 
 # Insights service deployer
-deploy/
+/deploy/*
+
+**/hbi_outbox_inserts.sql
 
 okteto/okteto.yaml
 okteto-logs/
