@@ -95,7 +95,8 @@ idmsvc" \
   --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac=latest \
   -p host-inventory/BYPASS_RBAC=false \
   --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest \
-  --set-image-tag quay.io/cloudservices/unleash-proxy=latest
+  --set-image-tag quay.io/cloudservices/unleash-proxy=latest \
+  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/service-accounts=latest \
 
   setup_debezium
   apply_schema "$LOCAL_SCHEMA_FILE"

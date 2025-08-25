@@ -26,6 +26,9 @@ class MassPermissionTester:
         self.user_id = str(20000 + user_num)
         self.username = f"user{user_num}"
         
+        # Debug output
+        print(f"🔍 Constructor Debug: user_num={user_num}, username='{self.username}', user_id='{self.user_id}'")
+        
         # User identity for API calls
         self.user_identity = {
             "identity": {
@@ -112,12 +115,14 @@ class MassPermissionTester:
             return False
         
         workspace_id = user_workspace['id']
+        workspace_name = user_workspace['name']
         print(f"📋 Testing hosts in workspace: {workspace_id[:8]}...")
         
-        # Access hosts through workspace details endpoint (like verification script)
+        # List hosts in this workspace via /hosts filtered by group_name
         response = requests.get(
-            f"http://localhost:8002/api/inventory/v1/groups/{workspace_id}",
+            "http://localhost:8002/api/inventory/v1/hosts",
             headers=headers,
+            params={"group_name": [workspace_name], "per_page": 100},
             timeout=30
         )
         
@@ -126,15 +131,15 @@ class MassPermissionTester:
             return False
         
         data = response.json()
-        hosts = data.get('hosts', [])
-        host_count = len(hosts)
+        hosts = data.get('results', [])
+        host_count = data.get('count', len(hosts))
         
         print(f"📊 {self.username} can see {host_count} hosts in their workspace")
         
         if self.detailed and hosts:
             print("📋 Host Details:")
             for host in hosts[:5]:  # Show first 5 hosts
-                print(f"   • {host['id']} - {host.get('display_name', 'N/A')}")
+                print(f"   • {host.get('id', '<unknown>')} - {host.get('display_name', 'N/A')}")
             if len(hosts) > 5:
                 print(f"   ... and {len(hosts) - 5} more hosts")
         
@@ -194,6 +199,7 @@ class MassPermissionTester:
             return True
         
         print(f"🔐 Testing {self.username}'s RBAC setup...")
+        print(f"🔍 Debug: username='{self.username}', user_num={self.user_num}, user_id='{self.user_id}'")
         
         # Get RBAC pod
         result = subprocess.run([
@@ -211,34 +217,38 @@ class MassPermissionTester:
 from management.models import Principal, Group, Policy, Role, Access, ResourceDefinition
 import json
 
+user = None
 try:
     user = Principal.objects.get(username="{self.username}")
-    print(f"✅ User found: {self.username} (ID: {user.user_id})")
-    
-    groups = Group.objects.filter(principals=user)
-    print(f"📋 Groups: {[g.name for g in groups]}")
-    
-    policies = Policy.objects.filter(group__principals=user)
-    print(f"📋 Policies: {[p.name for p in policies]}")
-    
-    for policy in policies:
-        roles = policy.roles.all()
-        print(f"📋 Roles in {policy.name}: {[r.name for r in roles]}")
+    if user:
+        print(f"✅ User found: {self.username} (ID: {{user.user_id}})")
         
-        for role in roles:
-            access_objects = Access.objects.filter(role=role)
-            for access in access_objects:
-                rds = ResourceDefinition.objects.filter(access=access)
-                print(f"   • {access.permission.permission}: {len(rds)} ResourceDefinitions")
-                for rd in rds:
-                    if rd.attributeFilter:
-                        filter_data = rd.attributeFilter if isinstance(rd.attributeFilter, dict) else json.loads(rd.attributeFilter)
-                        print(f"     - Workspace restriction: {filter_data.get('value', [])}")
+        groups = Group.objects.filter(principals=user)
+        print(f"📋 Groups: {{[g.name for g in groups]}}")
+        
+        policies = Policy.objects.filter(group__principals=user)
+        print(f"📋 Policies: {{[p.name for p in policies]}}")
+        
+        for policy in policies:
+            roles = policy.roles.all()
+            print(f"📋 Roles in {{policy.name}}: {{[r.name for r in roles]}}")
+            
+            for role in roles:
+                access_objects = Access.objects.filter(role=role)
+                for access in access_objects:
+                    rds = ResourceDefinition.objects.filter(access=access)
+                    print(f"   • {{access.permission.permission}}: {{len(rds)}} ResourceDefinitions")
+                    for rd in rds:
+                        if rd.attributeFilter:
+                            filter_data = rd.attributeFilter if isinstance(rd.attributeFilter, dict) else json.loads(rd.attributeFilter)
+                            print(f"     - Workspace restriction: {{filter_data.get('value', [])}}")
+    else:
+        print(f"❌ User {self.username} not found in RBAC")
 
 except Principal.DoesNotExist:
     print(f"❌ User {self.username} not found in RBAC")
 except Exception as e:
-    print(f"❌ Error: {e}")
+    print(f"❌ Error: {{e}}")
 
 exit()
 EOFPYTHON'''

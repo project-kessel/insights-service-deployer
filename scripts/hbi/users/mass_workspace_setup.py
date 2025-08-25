@@ -72,6 +72,8 @@ class ModernMassWorkspaceSetup:
         self.rbac_endpoint = os.getenv("RBAC_URL", "http://localhost:8080/api/rbac")
         self.hbi_reads_endpoint = os.getenv("HBI_READS_URL", "http://localhost:8002/api/inventory/v1")
         self.hbi_writes_endpoint = os.getenv("HBI_WRITES_URL", "http://localhost:8003/api/inventory/v1")
+        self.relations_endpoint = os.getenv("RELATIONS_URL", "http://localhost:8004/api/authz")
+        self.enable_kessel = os.getenv("ENABLE_KESSEL_REL", "false").lower() == "true"
         self.keycloak_admin_route = None
         self.keycloak_admin_token = None
         
@@ -192,8 +194,10 @@ class ModernMassWorkspaceSetup:
         services_and_ports = [
             ('rbac-service', 8080, 'rbac'),
             ('host-inventory-service-reads', 8002, 'hbi-reads'),
-            ('host-inventory-service', 8003, 'hbi-writes')
+            ('host-inventory-service-writes', 8003, 'hbi-writes')
         ]
+        if self.enable_kessel:
+            services_and_ports.append(('kessel-relations-api', 8004, 'relations'))
 
         for service_label, local_port, name in services_and_ports:
             try:
@@ -217,6 +221,104 @@ class ModernMassWorkspaceSetup:
         # Allow forwards to establish
         time.sleep(3)
         print("✅ Port forwarding established (if pods were found)")
+
+    def create_kessel_view_relation(self, workspace_id: str, username: str) -> bool:
+        """Grant Kessel inventory_host_view on the workspace to the given username via relations-api.
+        This creates a minimal role and role_binding and links them to the workspace:
+        - rbac/role:<role_id>#t_inventory_host_view @ rbac/principal:redhat/<username>
+        - rbac/role_binding:<rb_id>#t_role @ rbac/role:<role_id>
+        - rbac/role_binding:<rb_id>#t_subject @ rbac/principal:redhat/<username>
+        - rbac/workspace:<workspace_id>#t_binding @ rbac/role_binding:<rb_id>
+        """
+        headers = {
+            'x-rh-identity': self.admin_header,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+
+        # relations subject principal id typically includes provider prefix (e.g., "redhat/")
+        subject_id = f"redhat/{username}" if not username.startswith("redhat/") else username
+        role_id = str(uuid.uuid4())
+        role_binding_id = str(uuid.uuid4())
+
+        payload = {
+            "upsert": True,
+            "tuples": [
+                # Role grants inventory_host_view to this principal
+                {
+                    "resource": {
+                        "type": {"namespace": "rbac", "name": "role"},
+                        "id": role_id,
+                    },
+                    "relation": "t_inventory_host_view",
+                    "subject": {
+                        "subject": {
+                            "type": {"namespace": "rbac", "name": "principal"},
+                            "id": subject_id,
+                        }
+                    },
+                },
+                # Role binding links to role
+                {
+                    "resource": {
+                        "type": {"namespace": "rbac", "name": "role_binding"},
+                        "id": role_binding_id,
+                    },
+                    "relation": "t_role",
+                    "subject": {
+                        "subject": {
+                            "type": {"namespace": "rbac", "name": "role"},
+                            "id": role_id,
+                        }
+                    },
+                },
+                # Role binding links to subject principal
+                {
+                    "resource": {
+                        "type": {"namespace": "rbac", "name": "role_binding"},
+                        "id": role_binding_id,
+                    },
+                    "relation": "t_subject",
+                    "subject": {
+                        "subject": {
+                            "type": {"namespace": "rbac", "name": "principal"},
+                            "id": subject_id,
+                        }
+                    },
+                },
+                # Workspace binds the role_binding
+                {
+                    "resource": {
+                        "type": {"namespace": "rbac", "name": "workspace"},
+                        "id": workspace_id,
+                    },
+                    "relation": "t_binding",
+                    "subject": {
+                        "subject": {
+                            "type": {"namespace": "rbac", "name": "role_binding"},
+                            "id": role_binding_id,
+                        }
+                    },
+                },
+            ],
+        }
+
+        try:
+            resp = requests.post(
+                f"{self.relations_endpoint}/v1beta1/tuples",
+                json=payload,
+                headers=headers,
+                timeout=API_TIMEOUT,
+            )
+            if resp.status_code in [200, 201]:
+                print(f"✅ Granted Kessel host view for {username} on workspace {workspace_id[:8]}")
+                return True
+            else:
+                print(f"⚠️  Failed to grant Kessel relation for {username}: {resp.status_code} {resp.text}")
+                return False
+        except requests.RequestException as e:
+            print(f"⚠️  Network error granting Kessel relation for {username}: {e}")
+            return False
 
     def create_users_via_keycloak(self, user_numbers: List[int]) -> List[str]:
         """Create users via Keycloak Admin API"""
@@ -284,7 +386,7 @@ class ModernMassWorkspaceSetup:
         return created_users
 
     def create_workspace_via_hbi_groups(self, workspace_num: int, host_ids: List[str]) -> Optional[str]:
-        """Create workspace via HBI Groups API (the working approach!)"""
+        """Create workspace via HBI Groups API using two-step approach to avoid integrity constraints."""
         
         headers = {
             'x-rh-identity': self.admin_header,
@@ -292,48 +394,84 @@ class ModernMassWorkspaceSetup:
             'Content-Type': 'application/json'
         }
         
+        print(f"🔍 Creating workspace {workspace_num} with {len(host_ids)} hosts...")
+        
         for attempt in range(MAX_RETRIES):
             try:
                 # Generate unique name per attempt to avoid collisions
                 unique_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
                 workspace_name = f"mass-workspace-{workspace_num}-{unique_id}"
                 
-                # Create workspace with hosts included (like the working old script approach)
-                # This avoids the need for separate Kessel workspace/host move permissions
-                workspace_data = {
-                    "name": workspace_name,
-                    "host_ids": host_ids  # Include hosts in initial creation
-                }
+                # Step 1: Create empty workspace (no hosts) to avoid integrity constraints
+                print(f"  📤 Step 1: Creating empty workspace '{workspace_name}'...")
+                create_payload = {"name": workspace_name, "host_ids": []}
                 
                 response = requests.post(
                     f"{self.hbi_writes_endpoint}/groups",
-                    json=workspace_data,
+                    json=create_payload,
                     headers=headers,
                     timeout=API_TIMEOUT
                 )
                 
-                if response.status_code in [200, 201]:
-                    workspace_response = response.json()
-                    workspace_id = workspace_response['id']
-                    print(f"✅ Created workspace {workspace_name} with {len(host_ids)} hosts (ID: {workspace_id})")
-                    
-                    # Update counters for successful workspace and host assignment
-                    with progress_lock:
-                        progress_data['workspaces_created'] += 1
-                        progress_data['hosts_assigned'] += len(host_ids)
-                    
-                    return workspace_id
-                else:
-                    print(f"⚠️  Attempt {attempt + 1}: Failed to create workspace {workspace_name}: {response.text}")
+                print(f"  📥 Step 1 Response: {response.status_code} - {response.text[:200]}...")
+                
+                if response.status_code not in [200, 201]:
+                    print(f"⚠️  Attempt {attempt + 1}: Failed to create empty workspace {workspace_name}: {response.status_code} {response.text}")
                     if attempt < MAX_RETRIES - 1:
                         time.sleep(RETRY_DELAY)
+                    continue
+                
+                # Successfully created empty workspace
+                workspace_response = response.json()
+                workspace_id = workspace_response['id']
+                print(f"✅ Created empty workspace {workspace_name} (ID: {workspace_id})")
+                
+                # Step 2: Add hosts separately (this endpoint doesn't have integrity constraints)
+                if host_ids:
+                    print(f"  📤 Step 2: Adding {len(host_ids)} hosts to workspace {workspace_id}...")
+                    added_ok = False
+                    for patch_attempt in range(MAX_RETRIES):
+                        try:
+                            patch_resp = requests.post(
+                                f"{self.hbi_reads_endpoint}/groups/{workspace_id}/hosts",
+                                json=host_ids,
+                                headers=headers,
+                                timeout=API_TIMEOUT
+                            )
+                            print(f"  📥 Step 2 Response: {patch_resp.status_code} - {patch_resp.text[:200]}...")
+                            
+                            if patch_resp.status_code in [200, 201]:
+                                added_ok = True
+                                print(f"✅ Successfully added {len(host_ids)} hosts to workspace {workspace_id}")
+                                break
+                            else:
+                                print(f"⚠️  Add hosts attempt {patch_attempt + 1}: {patch_resp.status_code} {patch_resp.text}")
+                                if patch_attempt < MAX_RETRIES - 1:
+                                    time.sleep(RETRY_DELAY)
+                        except requests.RequestException as e:
+                            print(f"⚠️  Add hosts attempt {patch_attempt + 1}: network error: {e}")
+                            if patch_attempt < MAX_RETRIES - 1:
+                                time.sleep(RETRY_DELAY)
+
+                    if not added_ok:
+                        print(f"❌ Failed to add hosts to workspace {workspace_id} after {MAX_RETRIES} attempts")
+                        # Still return the workspace ID since it was created successfully
+                    else:
+                        print(f"✅ Set {len(host_ids)} hosts on workspace {workspace_id}")
+
+                # Update counters
+                with progress_lock:
+                    progress_data['workspaces_created'] += 1
+                    if host_ids and added_ok:
+                        progress_data['hosts_assigned'] += len(host_ids)
+                return workspace_id
                     
             except requests.RequestException as e:
                 print(f"⚠️  Attempt {attempt + 1}: Network error creating workspace {workspace_name}: {e}")
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(RETRY_DELAY)
         
-        print(f"❌ Failed to create workspace {workspace_name} after {MAX_RETRIES} attempts")
+        print(f"❌ Failed to create workspace after {MAX_RETRIES} attempts")
         return None
 
     def create_rbac_batch(self, workspace_batch: List[Tuple[int, str]], all_users: List[str]):
@@ -420,6 +558,18 @@ class ModernMassWorkspaceSetup:
                                 }
                             }
                         ]
+                    },
+                    {
+                        "permission": "inventory:groups:write",
+                        "resourceDefinitions": [
+                            {
+                                "attributeFilter": {
+                                    "key": "group.id",
+                                    "operation": "in",
+                                    "value": [workspace_id]
+                                }
+                            }
+                        ]
                     }
                 ]
             }
@@ -461,6 +611,10 @@ class ModernMassWorkspaceSetup:
             with progress_lock:
                 progress_data['permissions_created'] += 1
                 
+            # Optionally grant Kessel relation so /hosts read passes when Kessel host migration is enabled
+            if self.enable_kessel:
+                self.create_kessel_view_relation(workspace_id, username)
+
             return True
             
         except Exception as e:
@@ -567,6 +721,7 @@ class ModernMassWorkspaceSetup:
         
         return ungrouped_hosts, workspace_assignments
 
+   
     def run_modern_setup(self):
         """Execute the complete modern API-based mass setup"""
         print(f"🚀 Starting MODERN Mass Workspace Setup")
@@ -591,6 +746,13 @@ class ModernMassWorkspaceSetup:
             host_ids = self.get_available_hosts()
             ungrouped_hosts, workspace_assignments = self.calculate_host_distribution(host_ids)
             
+            # Debug: Show what we're working with
+            print(f"🔍 Debug: Found {len(host_ids)} total hosts")
+            print(f"🔍 Debug: Host distribution:")
+            for ws_num, host_list in workspace_assignments.items():
+                print(f"   • Workspace {ws_num}: {len(host_list)} hosts")
+            print("")
+            
             # Step 3: Create users via Keycloak Admin API
             print(f"👥 Creating {self.num_users} users via Keycloak...")
             user_batches = [
@@ -610,15 +772,18 @@ class ModernMassWorkspaceSetup:
             print(f"🏗️  Creating {self.num_users} workspaces via HBI Groups API...")
             workspaces = []
             
-            # Create workspaces with hosts in one call (like original working script)
+            # Create workspaces - ALL workspaces should be created, even if empty
             for workspace_num in range(self.num_users):
                 host_ids_for_workspace = workspace_assignments.get(workspace_num, [])
-                if host_ids_for_workspace:
-                    workspace_id = self.create_workspace_via_hbi_groups(workspace_num, host_ids_for_workspace)
-                    if workspace_id:
-                        workspaces.append((workspace_num, workspace_id))
+                # Create workspace regardless of whether it has hosts initially
+                workspace_id = self.create_workspace_via_hbi_groups(workspace_num, host_ids_for_workspace)
+                if workspace_id:
+                    workspaces.append((workspace_num, workspace_id))
+                    print(f"✅ Workspace {workspace_num} created with ID: {workspace_id}")
+                else:
+                    print(f"❌ Failed to create workspace {workspace_num}")
             
-            print(f"✅ Created {len(workspaces)} workspaces with hosts via HBI Groups API")
+            print(f"✅ Created {len(workspaces)} workspaces via HBI Groups API")
             
             # Step 5: Create RBAC groups, roles, and permissions for workspace access
             print(f"🔐 Setting up RBAC groups and permissions for workspace access...")
