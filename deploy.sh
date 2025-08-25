@@ -95,8 +95,11 @@ idmsvc" \
   --set-image-tag quay.io/redhat-services-prod/hcc-platex-services/chrome-service=latest \
   --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac=latest \
   -p host-inventory/BYPASS_RBAC=false \
+  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest \
   --set-image-tag quay.io/cloudservices/unleash-proxy=latest \
+  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/service-accounts=latest \
   --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest
+
 
   setup_rbac_debezium
   apply_schema "$LOCAL_SCHEMA_FILE"
@@ -254,7 +257,7 @@ build_unleash_importer_image() {
         echo "Image built and pushed to $IMAGE_TAG (local cleanup skipped - image in use)."
       fi
       UNLEASH_IMAGE="$IMAGE"
-      UNLEASH_TAG="$TAG"
+      UNLEASH_TAG="latest"
 
       check_quay_repo_public "$quay_user" "$REPO_NAME"
     fi
@@ -309,10 +312,10 @@ check_quay_repo_public() {
 
 deploy_unleash_importer_image() {
   echo "Deploy kessel unleash importer image with feature flags..."
-  build_unleash_importer_image
+  #build_unleash_importer_image
 
   if [[ -z "${UNLEASH_IMAGE}" || -z "${UNLEASH_TAG}" ]]; then
-    UNLEASH_IMAGE=quay.io/mmclaugh/kessel-unleash-import
+    UNLEASH_IMAGE=quay.io/rh-ee-aobrien/kessel-unleash-import
     UNLEASH_TAG=latest
   fi
 
@@ -320,7 +323,7 @@ deploy_unleash_importer_image() {
   oc delete --ignore-not-found=true --wait=true clowdjobinvocation/swatch-unleash-import-1
 
   # Starts the job that runs the unleash feature flag import
-  bonfire deploy rhsm --timeout=1800 --optional-deps-method none  \
+  bonfire deploy rhsm --timeout=1800 --optional-deps-method none \
     --frontends false --no-remove-resources app:rhsm \
     -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE="$UNLEASH_IMAGE" \
     -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE_TAG="$UNLEASH_TAG"
