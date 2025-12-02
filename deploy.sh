@@ -95,11 +95,9 @@ idmsvc" \
   --set-image-tag quay.io/redhat-services-prod/hcc-platex-services/chrome-service=latest \
   --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac=latest \
   -p host-inventory/BYPASS_RBAC=false \
-  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest \
+  -p host-inventory/BYPASS_KESSEL=false \
   --set-image-tag quay.io/cloudservices/unleash-proxy=latest \
-  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/service-accounts=latest \
   --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest
-
 
   setup_rbac_debezium
   apply_schema "$LOCAL_SCHEMA_FILE"
@@ -152,7 +150,7 @@ force_seed_rbac_data_in_relations() {
 
 setup_kessel() {
   echo "Kessel inventory is setting up.."
-  bonfire deploy kessel -C kessel-inventory --set-image-tag quay.io/redhat-services-prod/project-kessel-tenant/kessel-inventory/inventory-api=latest
+  bonfire deploy kessel -C kessel-inventory -C kessel-relations --set-image-tag quay.io/redhat-services-prod/project-kessel-tenant/kessel-inventory/inventory-api=latest
 
   setup_sink_connector
 }
@@ -173,20 +171,23 @@ apply_schema() {
   else
     # Download latest schema from rbac-config (default behavior)
     echo "Applying latest SpiceDB schema from rbac-config"
-    curl -o "$SCHEMA_FILE" https://raw.githubusercontent.com/RedHatInsights/rbac-config/refs/heads/master/configs/stage/schemas/schema.zed
+    curl -H 'Cache-Control: no-cache' -o  "$SCHEMA_FILE" https://raw.githubusercontent.com/RedHatInsights/rbac-config/refs/heads/master/configs/stage/schemas/schema.zed
     if [ $? -ne 0 ]; then
       echo "❌ ERROR: Failed to download schema from rbac-config"
       exit 1
     fi
   fi
+
+  # Delete the schema that was created already
+  oc delete configmap spicedb-schema
   # Apply the schema
   oc create configmap spicedb-schema --from-file="$SCHEMA_FILE" -o yaml --dry-run=client | oc apply -f -
   # Ensure the pods are using the new schema
   oc rollout restart deployment/kessel-relations-api
   # Clean up only if we downloaded the file
-  if [ -z "$LOCAL_SCHEMA_FILE" ]; then
-    rm "$SCHEMA_FILE"
-  fi
+  # if [ -z "$LOCAL_SCHEMA_FILE" ]; then
+  #   rm "$SCHEMA_FILE"
+  # fi
 }
 
 setup_sink_connector() {
@@ -325,7 +326,7 @@ deploy_unleash_importer_image() {
   # Starts the job that runs the unleash feature flag import
   bonfire deploy rhsm --timeout=1800 --optional-deps-method none \
     --frontends false --no-remove-resources app:rhsm \
-    -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE="$UNLEASH_IMAGE" \
+    -C rhsm -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE="$UNLEASH_IMAGE" \
     -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE_TAG="$UNLEASH_TAG"
 }
 
@@ -374,44 +375,6 @@ create_hbi_connectors() {
     -p DB_SECRET_NAME="host-inventory-db" | oc apply -f -
 }
 
-# TODO: remove this once we have a proper outbox table in the hbi db (RHINENG-19194)
-create_hbi_tables() {
-  echo "Creating outbox and signal tables in host-inventory-db hbi schema..."
-
-  HOST_INVENTORY_DB_POD=$(oc get pods -l app=host-inventory,service=db,sub=local_db --no-headers -o custom-columns=":metadata.name" --field-selector=status.phase==Running | head -1)
-
-  if [ -z "$HOST_INVENTORY_DB_POD" ]; then
-    echo "Error: Could not find host-inventory database pod"
-    exit 1
-  fi
-
-  echo "Using database pod: $HOST_INVENTORY_DB_POD"
-
-  # Create hbi schema if it doesn't exist
-  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"CREATE SCHEMA IF NOT EXISTS hbi;\""
-
-  # Create outbox table
-  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"CREATE TABLE IF NOT EXISTS hbi.outbox (
-    id uuid NOT NULL,
-    aggregatetype character varying(255) NOT NULL,
-    aggregateid character varying(255) NOT NULL,
-    operation character varying(255) NOT NULL,
-    version character varying(255) NOT NULL,
-    payload jsonb
-  );\""
-
-  # Create signal table
-  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"CREATE TABLE IF NOT EXISTS hbi.signal (
-    id VARCHAR(255) PRIMARY KEY,
-    type VARCHAR(255) NOT NULL,
-    data VARCHAR(255) NULL
-  );\""
-
-  # Verify the tables were created
-  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"\\d hbi.outbox\""
-  oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"\\d hbi.signal\""
-}
-
 add_users() {
   echo "Importing users from data/rbac_users_data.json into Keycloak..."
   scripts/rbac_load_users.sh
@@ -447,8 +410,8 @@ usage() {
   echo "  deploy_unleash_importer_image      Deploy unleash importer"
   echo "  add_hosts_to_hbi [org_id] [count]  Add test hosts to HBI"
   echo "  add_users                          Add test users"
-  echo "  host-replication-tables            Create outbox and signal tables in host-inventory-db hbi schema"
   echo "  host-replication-kafka             Set up host replication kafka connectors/consumers"
+  echo "  apply-schema  [schema_file]        Applies the schema from the file in the arg, if no arg then the latest one from rbac-config"
   echo ""
   echo "Deploy Options:"
   echo "  template_ref    Git ref for host-inventory deploy template (default: latest commit)"
@@ -482,8 +445,12 @@ case "$1" in
     deploy_unleash_importer_image
     deploy "$2" "$3" "$4" "$5"
     wait_for_sink_connector_ready
+    setup_kessel_inventory_consumer
+    create_hbi_connectors
+    oc patch kafkaconnector "hbi-outbox-connector" --type='merge' -p='{"spec":{"state":"running"}}'
     add_users
     add_hosts_to_hbi
+    apply_schema "$5"
     show_bonfire_namespace
     ;;
   clean_download_debezium_configuration)
@@ -502,12 +469,12 @@ case "$1" in
   deploy_unleash_importer_image)
     deploy_unleash_importer_image
     ;;
-  host-replication-tables)
-    create_hbi_tables
-    ;;
   host-replication-kafka)
     setup_kessel_inventory_consumer
     create_hbi_connectors
+    ;;
+  apply-schema)
+    apply_schema "$2"
     ;;
   iqe)
     iqe

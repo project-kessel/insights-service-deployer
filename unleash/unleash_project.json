@@ -13,7 +13,32 @@
         "archived": false
       },
       {
+        "name": "hbi.kessel-migration",
+        "description": "Gates the UI functionality for Kessel integration (especially move between workspaces.)",
+        "type": "release",
+        "project": "default",
+        "stale": false,
+        "impressionData": false,
+        "archived": false
+      },
+      {
         "name": "hbi.api.kessel-host-migration",
+        "description": "Gates the functionality for Phase 1 of the HBI Kessel migration (RHCLOUD-39540).",
+        "type": "release",
+        "project": "default",
+        "stale": false,
+        "enabled": false,
+        "strategies": [
+            {
+                "name": "default",
+                "parameters": {}
+            }
+        ],
+        "variants": [],
+        "createdAt": "2025-04-17T21:21:08Z"
+      },
+      {
+        "name": "hbi.api.kessel-phase-1",
         "description": "Gates the functionality for Phase 1 of the HBI Kessel migration (RHCLOUD-39540).",
         "type": "release",
         "project": "default",
@@ -119,10 +144,24 @@
       },
       {
         "enabled": true,
+        "featureName": "hbi.kessel-migration",
+        "environment": "development",
+        "variants": [],
+        "name": "hbi.kessel-migration"
+      },
+      {
+        "enabled": true,
         "featureName": "hbi.api.kessel-host-migration",
         "environment": "development",
         "variants": [],
         "name": "hbi.api.kessel-host-migration"
+      },
+      {
+        "enabled": true,
+        "featureName": "hbi.api.kessel-phase-1",
+        "environment": "development",
+        "variants": [],
+        "name": "hbi.api.kessel-phase-1"
       },
       {
         "enabled": true,

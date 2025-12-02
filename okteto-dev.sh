@@ -315,6 +315,52 @@ check_cluster_safety() {
     fi
 }
 
+# Ensure Okteto context is set to prevent first-run prompts
+ensure_okteto_context() {
+    log "Checking for existing Okteto context to prevent first-run prompts..."
+    
+    # 'okteto context show' will fail if no context is selected.
+    # This is a reliable way to check for the first-run scenario.
+    if okteto context show >/dev/null 2>&1; then
+        log "✅ Okteto context already configured."
+        return 0
+    fi
+    
+    warn "⚠️  Okteto context not found. Configuring one to prevent interactive prompts..."
+    
+    local current_kube_context
+    current_kube_context=$(oc config current-context 2>/dev/null)
+    
+    if [[ -z "$current_kube_context" ]]; then
+        error "❌ Could not determine current 'oc' context."
+        error "   Please log in to your cluster with 'oc login' first."
+        return 1
+    fi
+    
+    log "   Using current 'oc' context: $current_kube_context"
+    
+    local namespace
+    namespace=$(oc project -q 2>/dev/null)
+
+    if [[ -z "$namespace" ]]; then
+        error "❌ No OpenShift project is selected."
+        error "   Please select a project with 'oc project <project-name>' and run the script again."
+        return 1
+    fi
+    
+    # The `okteto context use` command can be interactive on first run.
+    # Providing the context name and namespace should make it non-interactive.
+    # This creates the okteto config and prevents future prompts.
+    if okteto context use "$current_kube_context" --namespace "$namespace" >/dev/null 2>&1; then
+        log "✅ Successfully configured Okteto context."
+        log "   This is a one-time setup to improve user experience."
+    else
+        error "❌ Failed to configure Okteto context automatically."
+        error "   You may be prompted by Okteto on the first run."
+        return 1
+    fi
+}
+
 
 # Main okteto commands
 okteto_up() {
@@ -868,10 +914,13 @@ main() {
         error "Please verify the path exists and contains your insights-host-inventory repository"
         exit 1
     fi
+
+    # Ensure okteto context exists to prevent first-run prompts
+    ensure_okteto_context || exit 1
     
     # Check if we're running on a safe (ephemeral) cluster
     check_cluster_safety || exit 1
-
+    
     # Check if common ports are in use (Okteto typically uses these for SSH tunnels)
     check_port_conflicts || exit 1
     

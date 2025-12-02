@@ -23,5 +23,4 @@ oc rsh $HOST_DB_POD psql -d host-inventory -c "delete from hbi.hosts;"
 echo "Removing replication slots..."
 oc rsh $HOST_DB_POD psql -d host-inventory -c "select pg_drop_replication_slot('debezium_hosts'); select pg_drop_replication_slot('debezium_outbox');"
 
-oc rsh $HOST_DB_POD psql -d host-inventory -c "drop table hbi.outbox; drop table hbi.signal"
 echo "Done!"
