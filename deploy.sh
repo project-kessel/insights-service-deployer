@@ -68,6 +68,7 @@ deploy() {
   --set-template-ref host-inventory="$HBI_DEPLOYMENT_TEMPLATE_REF"  \
   -p rbac/MEMORY_LIMIT=512Mi \
   -p rbac/MEMORY_REQUEST=256Mi \
+  -p rbac/BYPASS_BOP_VERIFICATION=True \
   -p rbac/V2_APIS_ENABLED=True -p rbac/V2_READ_ONLY_API_MODE=False -p rbac/V2_BOOTSTRAP_TENANT=True \
   -p rbac/REPLICATION_TO_RELATION_ENABLED=True \
   -p rbac/KAFKA_ENABLED=False -p rbac/NOTIFICATONS_ENABLED=False \
@@ -97,7 +98,7 @@ idmsvc" \
   -p host-inventory/BYPASS_RBAC=false \
   -p host-inventory/BYPASS_KESSEL=false \
   --set-image-tag quay.io/cloudservices/unleash-proxy=latest \
-  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest
+  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=1a28b91
 
   setup_rbac_debezium
   apply_schema "$LOCAL_SCHEMA_FILE"
@@ -258,7 +259,7 @@ build_unleash_importer_image() {
         echo "Image built and pushed to $IMAGE_TAG (local cleanup skipped - image in use)."
       fi
       UNLEASH_IMAGE="$IMAGE"
-      UNLEASH_TAG="latest"
+      UNLEASH_TAG="$TAG"
 
       check_quay_repo_public "$quay_user" "$REPO_NAME"
     fi
