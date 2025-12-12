@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
 
 """
-Modern Mass Workspace Setup Script
+Mass Workspace Setup Script
 ==================================
 
 This script creates a user-defined number of users/workspaces and distributes
-a large number of hosts across them for demo purposes using MODERN API approaches.
+a large number of hosts across them for demo purposes using API approaches.
 
 ✅ WHAT'S NEW:
-- Uses Keycloak API for user creation (no database hacking!)
-- Uses HBI Groups API for workspace creation (the working approach!)
+- Uses Keycloak API for user creation
+- Uses HBI Groups API for workspace creation
 - Uses RBAC v1 API with ResourceDefinitions for workspace filtering
 - Proper error handling and validation with retries
 - Full audit trails and event publishing
-- No more oc exec database bypassing!
 
 Usage:
-    python modern_mass_workspace_setup.py --users 20 --hosts 10000 --ungrouped-ratio 0.1
+    python mass_workspace_setup.py --users 20 --hosts 10000 --ungrouped-ratio 0.1
 
 Features:
-- Creates N users via Keycloak Admin API (no database hacking!)
-- Creates N workspaces via HBI Groups API (the working approach!)
+- Creates N users via Keycloak Admin API
+- Creates N workspaces via HBI Groups API
 - Distributes hosts evenly across workspaces during creation
 - Leaves a percentage of hosts ungrouped
-- Parallel processing for performance
 - Progress tracking and comprehensive error handling with retries
 - Proper API validation and event publishing
 """
@@ -59,7 +57,7 @@ progress_data = {
     'permissions_created': 0
 }
 
-class ModernMassWorkspaceSetup:
+class MassWorkspaceSetup:
     def __init__(self, num_users: int, num_hosts: int, ungrouped_ratio: float):
         self.num_users = num_users
         self.num_hosts = num_hosts
@@ -722,12 +720,9 @@ class ModernMassWorkspaceSetup:
         return ungrouped_hosts, workspace_assignments
 
    
-    def run_modern_setup(self):
-        """Execute the complete modern API-based mass setup"""
-        print(f"🚀 Starting MODERN Mass Workspace Setup")
-        print(f"=" * 60)
-        print(f"🔥 USING MODERN APIS - NO DATABASE HACKING!")
-        print(f"=" * 60)
+    def run_setup(self):
+        """Execute the complete API-based mass setup"""
+        print(f"🚀 Starting Mass Workspace Setup")
         print(f"Users/Workspaces: {self.num_users}")
         print(f"Total Hosts: {self.num_hosts}")
         print(f"Ungrouped Ratio: {self.ungrouped_ratio:.1%}")
@@ -804,7 +799,7 @@ class ModernMassWorkspaceSetup:
             self.print_final_summary(elapsed_time, ungrouped_hosts)
             
         except Exception as e:
-            print(f"❌ Modern mass setup failed: {e}")
+            print(f"❌ Mass setup failed: {e}")
             raise
         finally:
             self.cleanup()
@@ -812,7 +807,7 @@ class ModernMassWorkspaceSetup:
     def print_final_summary(self, elapsed_time: float, ungrouped_hosts: List[str]):
         """Print final setup summary"""
         print("")
-        print("🎉 MODERN MASS WORKSPACE SETUP COMPLETED!")
+        print("🎉 MASS WORKSPACE SETUP COMPLETED!")
         print("=" * 60)
         print("🔥 ALL OPERATIONS PERFORMED VIA PROPER APIS!")
         print("=" * 60)
@@ -824,18 +819,13 @@ class ModernMassWorkspaceSetup:
         print(f"⏱️  Total time: {elapsed_time:.1f} seconds")
         print(f"📊 Rate: {progress_data['hosts_assigned'] / elapsed_time:.1f} hosts/second")
         print("")
-        print("🔍 Advantages of modern approach:")
-        print("   • ✅ Proper validation & error handling")
-        print("   • ✅ Full audit trails")
-        print("   • ✅ Event publishing (automatic Kessel sync!)")
-        print("   • ✅ No database bypassing")
-        print("   • ✅ Security & authorization enforced")
+        print("🔍 What to do next:")
         print("")
         print("🧪 Test individual user access:")
         print("   python test_mass_permissions.py --user 5")
         print("")
         print("🗑️  To cleanup:")
-        print("   python modern_mass_workspace_teardown.py")
+        print("   python mass_workspace_teardown.py")
 
     def cleanup(self):
         """Terminate any oc port-forward processes that were started by this script."""
@@ -854,10 +844,10 @@ class ModernMassWorkspaceSetup:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="MODERN Mass Workspace Setup - Create many users/workspaces using proper APIs",
+        description="Mass Workspace Setup - Create many users/workspaces using proper APIs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-🔥 MODERN API-BASED APPROACH - NO DATABASE HACKING!
+🔥 API-BASED APPROACH - NO DATABASE HACKING!
 
 This script uses:
 ✅ Keycloak API for user creation
@@ -868,10 +858,10 @@ This script uses:
 
 Examples:
   # Create 20 users/workspaces with 10,000 hosts (10% ungrouped)
-  python modern_mass_workspace_setup.py --users 20 --hosts 10000
+  python mass_workspace_setup.py --users 20 --hosts 10000
   
   # Create 50 users/workspaces with 5,000 hosts (20% ungrouped)  
-  python modern_mass_workspace_setup.py --users 50 --hosts 5000 --ungrouped-ratio 0.2
+  python mass_workspace_setup.py --users 50 --hosts 5000 --ungrouped-ratio 0.2
         """
     )
     
@@ -915,9 +905,9 @@ Examples:
         print("❌ ERROR: Must have at least 1 host per user")
         sys.exit(1)
     
-    # Run modern setup
-    setup = ModernMassWorkspaceSetup(args.users, args.hosts, args.ungrouped_ratio)
-    setup.run_modern_setup()
+    # Run setup
+    setup = MassWorkspaceSetup(args.users, args.hosts, args.ungrouped_ratio)
+    setup.run_setup()
 
 
 if __name__ == '__main__':
