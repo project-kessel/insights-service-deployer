@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 import subprocess
 import requests
@@ -36,6 +37,8 @@ class MassWorkspaceTeardown:
         self.namespace = None
         self.rbac_pod = None
         self.port_forwards = []
+        self.keycloak_admin_route = None
+        self.keycloak_admin_token = None
         
         # Admin user for API calls
         self.admin_identity = {
@@ -97,6 +100,57 @@ class MassWorkspaceTeardown:
         
         self.rbac_pod = running_pods[0]['metadata']['name']
         print(f"✅ Using RBAC pod: {self.rbac_pod}")
+        
+        # Setup Keycloak access for user cleanup
+        self._setup_keycloak_access()
+
+    def _setup_keycloak_access(self):
+        """Setup Keycloak admin access for user cleanup"""
+        print("🔑 Setting up Keycloak admin access...")
+        
+        try:
+            result = subprocess.run([
+                'bonfire', 'namespace', 'describe', '-o', 'json'
+            ], capture_output=True, text=True, check=True)
+            
+            namespace_data = json.loads(result.stdout)
+            
+            keycloak_admin_username = None
+            keycloak_admin_password = None
+            
+            for key, value in namespace_data.items():
+                if 'keycloak_admin_username' in key.lower():
+                    keycloak_admin_username = value
+                elif 'keycloak_admin_password' in key.lower():
+                    keycloak_admin_password = value
+                elif 'keycloak' in key.lower() and 'route' in key.lower():
+                    self.keycloak_admin_route = value
+            
+            if not all([keycloak_admin_username, keycloak_admin_password, self.keycloak_admin_route]):
+                print("⚠️  Keycloak credentials not found - will skip Keycloak user cleanup")
+                return
+            
+            # Get admin token
+            token_url = f"{self.keycloak_admin_route}/realms/master/protocol/openid-connect/token"
+            response = requests.post(
+                token_url,
+                data={
+                    'grant_type': 'password',
+                    'client_id': 'admin-cli',
+                    'username': keycloak_admin_username,
+                    'password': keycloak_admin_password
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                self.keycloak_admin_token = response.json()['access_token']
+                print("✅ Keycloak admin access configured")
+            else:
+                print(f"⚠️  Failed to get Keycloak admin token: {response.status_code}")
+                
+        except Exception as e:
+            print(f"⚠️  Could not setup Keycloak access: {e}")
 
     def setup_port_forwarding(self):
         """Setup port forwarding for API access"""
@@ -172,20 +226,17 @@ class MassWorkspaceTeardown:
             raise Exception("❌ RBAC pod not set")
         
         command = '''./rbac/manage.py shell << 'EOFPYTHON'
-from management.models import Principal, Group, Policy, Role
+from management.models import Principal, Group, Role
 
 try:
-    # Find mass users (user IDs starting with 2000x)
-    mass_users = Principal.objects.filter(username__startswith='user', user_id__startswith='2000')
+    # Find mass users - look for userN pattern created by mass_workspace_setup
+    # Note: Principal records only exist if users have made API requests through RBAC
+    mass_users = Principal.objects.filter(username__regex=r'^user\\d+$')
     print(f"MASS_USERS: {len(mass_users)}")
     
     # Find mass groups
     mass_groups = Group.objects.filter(name__startswith='mass-group-')
     print(f"MASS_GROUPS: {len(mass_groups)}")
-    
-    # Find mass policies
-    mass_policies = Policy.objects.filter(name__startswith='mass-policy-')
-    print(f"MASS_POLICIES: {len(mass_policies)}")
     
     # Find mass roles
     mass_roles = Role.objects.filter(name__startswith='Mass Viewer')
@@ -212,12 +263,53 @@ EOFPYTHON'''
                 rbac_counts[key] = int(value)
         
         print(f"📋 Found RBAC objects:")
-        print(f"   • Users: {rbac_counts.get('MASS_USERS', 0)}")
+        print(f"   • Principals: {rbac_counts.get('MASS_USERS', 0)} (only if users made API calls)")
         print(f"   • Groups: {rbac_counts.get('MASS_GROUPS', 0)}")
-        print(f"   • Policies: {rbac_counts.get('MASS_POLICIES', 0)}")
         print(f"   • Roles: {rbac_counts.get('MASS_ROLES', 0)}")
         
-        return mass_workspaces, rbac_counts
+        # Find Keycloak users
+        keycloak_users = self._discover_keycloak_users()
+        rbac_counts['KEYCLOAK_USERS'] = len(keycloak_users)
+        print(f"📋 Found Keycloak users: {len(keycloak_users)}")
+        
+        return mass_workspaces, rbac_counts, keycloak_users
+
+    def _discover_keycloak_users(self) -> List[Dict]:
+        """Discover mass-created users in Keycloak"""
+        if not self.keycloak_admin_route or not self.keycloak_admin_token:
+            return []
+        
+        try:
+            headers = {
+                'Authorization': f'Bearer {self.keycloak_admin_token}',
+                'Content-Type': 'application/json'
+            }
+            
+            # Search for users matching userN pattern
+            # Keycloak search is prefix-based, so search for 'user'
+            response = requests.get(
+                f"{self.keycloak_admin_route}/admin/realms/redhat-external/users",
+                params={'search': 'user', 'max': 1000},
+                headers=headers,
+                timeout=30
+            )
+            
+            if response.status_code != 200:
+                print(f"⚠️  Failed to query Keycloak users: {response.status_code}")
+                return []
+            
+            all_users = response.json()
+            # Filter to only userN pattern (user0, user1, user2, etc.)
+            mass_users = [
+                u for u in all_users 
+                if re.match(r'^user\d+$', u.get('username', ''))
+            ]
+            
+            return mass_users
+            
+        except Exception as e:
+            print(f"⚠️  Error discovering Keycloak users: {e}")
+            return []
 
     def confirm_deletion(self, mass_workspaces: List[Dict], rbac_counts: Dict):
         """Confirm deletion with user"""
@@ -227,15 +319,58 @@ EOFPYTHON'''
         print("")
         print("⚠️  WARNING: This will permanently delete:")
         print(f"   • {len(mass_workspaces)} mass workspaces")
-        print(f"   • {rbac_counts.get('MASS_USERS', 0)} mass users")
+        print(f"   • {rbac_counts.get('KEYCLOAK_USERS', 0)} Keycloak users")
+        print(f"   • {rbac_counts.get('MASS_USERS', 0)} RBAC principals")
         print(f"   • {rbac_counts.get('MASS_GROUPS', 0)} mass groups")
-        print(f"   • {rbac_counts.get('MASS_POLICIES', 0)} mass policies")
         print(f"   • {rbac_counts.get('MASS_ROLES', 0)} mass roles")
         print(f"   • All associated Access objects and ResourceDefinitions")
         print("")
         
         response = input("Are you sure you want to continue? (yes/no): ").lower().strip()
         return response in ['yes', 'y']
+
+    def remove_keycloak_users(self, keycloak_users: List[Dict]):
+        """Remove mass users from Keycloak"""
+        if not keycloak_users:
+            print("ℹ️  No Keycloak users to remove")
+            return
+        
+        if not self.keycloak_admin_route or not self.keycloak_admin_token:
+            print("⚠️  Keycloak access not available - skipping user removal")
+            return
+        
+        print(f"🗑️  Removing {len(keycloak_users)} users from Keycloak...")
+        
+        headers = {
+            'Authorization': f'Bearer {self.keycloak_admin_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        removed = 0
+        for user in keycloak_users:
+            user_id = user.get('id')
+            username = user.get('username')
+            
+            try:
+                response = requests.delete(
+                    f"{self.keycloak_admin_route}/admin/realms/redhat-external/users/{user_id}",
+                    headers=headers,
+                    timeout=30
+                )
+                
+                if response.status_code in [200, 204, 404]:
+                    print(f"✅ Removed Keycloak user: {username}")
+                    removed += 1
+                else:
+                    print(f"⚠️  Failed to remove Keycloak user {username}: {response.status_code}")
+                    
+            except Exception as e:
+                print(f"⚠️  Error removing Keycloak user {username}: {e}")
+        
+        with progress_lock:
+            progress_data['users_removed'] = removed
+        
+        print(f"✅ Removed {removed}/{len(keycloak_users)} Keycloak users")
 
     def remove_mass_workspaces(self, mass_workspaces: List[Dict]):
         """Remove all mass workspaces"""
@@ -284,7 +419,7 @@ EOFPYTHON'''
             raise Exception("❌ RBAC pod not set")
         
         command = '''./rbac/manage.py shell << 'EOFPYTHON'
-from management.models import Principal, Group, Policy, Role, Access, ResourceDefinition
+from management.models import Principal, Group, Role, Access, ResourceDefinition
 from django.db import transaction
 
 try:
@@ -294,14 +429,13 @@ try:
         removed_counts = {
             'users': 0,
             'groups': 0,
-            'policies': 0,
             'roles': 0,
             'access_objects': 0,
             'resource_definitions': 0
         }
         
-        # Find mass users (user IDs starting with 2000x)
-        mass_users = Principal.objects.filter(username__startswith='user', user_id__startswith='2000')
+        # Find mass users - userN pattern (Principal records only exist if users made API calls)
+        mass_users = Principal.objects.filter(username__regex=r'^user\\d+$')
         print(f"Found {len(mass_users)} mass users to remove")
         
         # Remove users from groups and delete groups
@@ -310,13 +444,6 @@ try:
             group.principals.clear()
             group.delete()
             removed_counts['groups'] += 1
-        
-        # Remove policies
-        mass_policies = Policy.objects.filter(name__startswith='mass-policy-')
-        for policy in mass_policies:
-            policy.roles.clear()
-            policy.delete()
-            removed_counts['policies'] += 1
         
         # Remove roles and associated objects
         mass_roles = Role.objects.filter(name__startswith='Mass Viewer')
@@ -343,9 +470,8 @@ try:
         removed_counts['users'] = user_count
         
         print(f"✅ Successfully removed:")
-        print(f"   • Users: {removed_counts['users']}")
+        print(f"   • Principals: {removed_counts['users']}")
         print(f"   • Groups: {removed_counts['groups']}")
-        print(f"   • Policies: {removed_counts['policies']}")
         print(f"   • Roles: {removed_counts['roles']}")
         print(f"   • Access objects: {removed_counts['access_objects']}")
         print(f"   • ResourceDefinitions: {removed_counts['resource_definitions']}")
@@ -390,9 +516,9 @@ EOFPYTHON'''
             self.setup_port_forwarding()
             
             # Discover objects
-            mass_workspaces, rbac_counts = self.discover_mass_objects()
+            mass_workspaces, rbac_counts, keycloak_users = self.discover_mass_objects()
             
-            if not mass_workspaces and all(count == 0 for count in rbac_counts.values()):
+            if not mass_workspaces and not keycloak_users and all(count == 0 for count in rbac_counts.values()):
                 print("ℹ️  No mass objects found to remove")
                 return
             
@@ -402,6 +528,7 @@ EOFPYTHON'''
                 return
             
             # Remove objects
+            self.remove_keycloak_users(keycloak_users)
             self.remove_mass_workspaces(mass_workspaces)
             self.remove_mass_rbac_objects()
             
