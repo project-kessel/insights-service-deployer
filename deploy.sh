@@ -95,10 +95,12 @@ idmsvc" \
   --set-image-tag quay.io/cloudservices/insights-inventory-frontend="${HOST_FRONTEND_GIT_COMMIT}" \
   --set-image-tag quay.io/redhat-services-prod/hcc-platex-services/chrome-service=latest \
   --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac=latest \
+  --set-image-tag quay.io/cloudservices/insights-chrome-frontend=fa75ad9 \
+  --set-image-tag quay.io/cloudservices/insights-dashboard-frontend=04a7e02 \
   -p host-inventory/BYPASS_RBAC=false \
   -p host-inventory/BYPASS_KESSEL=false \
   --set-image-tag quay.io/cloudservices/unleash-proxy=latest \
-  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=1a28b91
+  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest
 
   setup_rbac_debezium
   apply_schema "$LOCAL_SCHEMA_FILE"
