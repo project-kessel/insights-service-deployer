@@ -68,6 +68,7 @@ deploy() {
   --set-template-ref host-inventory="$HBI_DEPLOYMENT_TEMPLATE_REF"  \
   -p rbac/MEMORY_LIMIT=512Mi \
   -p rbac/MEMORY_REQUEST=256Mi \
+  -p rbac/BYPASS_BOP_VERIFICATION=True \
   -p rbac/V2_APIS_ENABLED=True -p rbac/V2_READ_ONLY_API_MODE=False -p rbac/V2_BOOTSTRAP_TENANT=True \
   -p rbac/REPLICATION_TO_RELATION_ENABLED=True \
   -p rbac/KAFKA_ENABLED=False -p rbac/NOTIFICATONS_ENABLED=False \
@@ -94,6 +95,8 @@ idmsvc" \
   --set-image-tag quay.io/cloudservices/insights-inventory-frontend="${HOST_FRONTEND_GIT_COMMIT}" \
   --set-image-tag quay.io/redhat-services-prod/hcc-platex-services/chrome-service=latest \
   --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac=latest \
+  --set-image-tag quay.io/cloudservices/insights-chrome-frontend=fa75ad9 \
+  --set-image-tag quay.io/cloudservices/insights-dashboard-frontend=04a7e02 \
   -p host-inventory/BYPASS_RBAC=false \
   -p host-inventory/BYPASS_KESSEL=false \
   --set-image-tag quay.io/cloudservices/unleash-proxy=latest \
@@ -307,10 +310,10 @@ check_quay_repo_public() {
 
 deploy_unleash_importer_image() {
   echo "Deploy kessel unleash importer image with feature flags..."
-  build_unleash_importer_image
+  #build_unleash_importer_image
 
   if [[ -z "${UNLEASH_IMAGE}" || -z "${UNLEASH_TAG}" ]]; then
-    UNLEASH_IMAGE=quay.io/mmclaugh/kessel-unleash-import
+    UNLEASH_IMAGE=quay.io/rh-ee-aobrien/kessel-unleash-import
     UNLEASH_TAG=latest
   fi
 
@@ -318,7 +321,7 @@ deploy_unleash_importer_image() {
   oc delete --ignore-not-found=true --wait=true clowdjobinvocation/swatch-unleash-import-1
 
   # Starts the job that runs the unleash feature flag import
-  bonfire deploy rhsm --timeout=1800 --optional-deps-method none  \
+  bonfire deploy rhsm --timeout=1800 --optional-deps-method none \
     --frontends false --no-remove-resources app:rhsm \
     -C rhsm -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE="$UNLEASH_IMAGE" \
     -p rhsm/SWATCH_UNLEASH_IMPORT_IMAGE_TAG="$UNLEASH_TAG"
