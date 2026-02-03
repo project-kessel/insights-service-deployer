@@ -68,6 +68,7 @@ deploy() {
   --set-template-ref host-inventory="$HBI_DEPLOYMENT_TEMPLATE_REF"  \
   -p rbac/MEMORY_LIMIT=512Mi \
   -p rbac/MEMORY_REQUEST=256Mi \
+  -p rbac/RBAC_KAFKA_CONSUMER_REPLICAS=1 \
   -p rbac/V2_APIS_ENABLED=True -p rbac/V2_READ_ONLY_API_MODE=False -p rbac/V2_BOOTSTRAP_TENANT=True \
   -p rbac/REPLICATION_TO_RELATION_ENABLED=True \
   -p rbac/KAFKA_ENABLED=False -p rbac/NOTIFICATONS_ENABLED=False \
