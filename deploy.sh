@@ -68,7 +68,7 @@ deploy() {
   --set-template-ref host-inventory="$HBI_DEPLOYMENT_TEMPLATE_REF"  \
   -p rbac/MEMORY_LIMIT=512Mi \
   -p rbac/MEMORY_REQUEST=256Mi \
-  -p rbac/RBAC_KAFKA_CONSUMER_REPLICAS=1 \
+  -p rbac/RBAC_KAFKA_CONSUMER_REPLICAS=0 \
   -p rbac/V2_APIS_ENABLED=True -p rbac/V2_READ_ONLY_API_MODE=False -p rbac/V2_BOOTSTRAP_TENANT=True \
   -p rbac/REPLICATION_TO_RELATION_ENABLED=True \
   -p rbac/KAFKA_ENABLED=False -p rbac/NOTIFICATONS_ENABLED=False \
@@ -147,12 +147,49 @@ force_seed_rbac_data_in_relations() {
   echo "$OUTPUT"
 
   setup_kessel
+  setup_rbac_consumer
+}
+
+setup_rbac_consumer() {
+  echo "RBAC consumer is setting up.."
+  NAMESPACE=`oc project -q`
+
+  bonfire process rbac \
+    --source=appsre \
+    --set-parameter rbac/RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.relations-replication-event \
+    --set-parameter rbac/RBAC_KAFKA_CONSUMER_GROUP_ID=connect-relations-sink-connector \
+    -p rbac/MEMORY_LIMIT=512Mi \
+    -p rbac/MEMORY_REQUEST=256Mi \
+    -p rbac/RBAC_KAFKA_CONSUMER_REPLICAS=1 \
+    -p rbac/V2_APIS_ENABLED=True -p rbac/V2_READ_ONLY_API_MODE=False -p rbac/V2_BOOTSTRAP_TENANT=True \
+    -p rbac/REPLICATION_TO_RELATION_ENABLED=True \
+    -p rbac/KAFKA_ENABLED=True \
+    -p rbac/RBAC_KAFKA_CONSUMER_TOPIC=outbox.event.relations-replication-event \
+    -p rbac/RBAC_KAFKA_CONSUMER_GROUP_ID=connect-relations-sink-connector \
+    -p rbac/NOTIFICATONS_ENABLED=False \
+    -p rbac/NOTIFICATIONS_RH_ENABLED=False \
+    -p rbac/ROLE_CREATE_ALLOW_LIST="remediations,\
+inventory,\
+policies,\
+advisor,\
+vulnerability,\
+compliance,\
+automation-analytics,\
+notifications,\
+patch,\
+integrations,\
+ros,\
+staleness,\
+config-manager,\
+idmsvc" \
+    -p rbac/V2_MIGRATION_APP_EXCLUDE_LIST="approval" \
+    -p rbac/V2_MIGRATION_RESOURCE_EXCLUDE_LIST="empty-exclude-list" \
+    --namespace $NAMESPACE | oc apply -f - -n $NAMESPACE
 }
 
 setup_kessel() {
   echo "Kessel inventory is setting up.."
   bonfire deploy kessel -C kessel-inventory -C kessel-relations --set-image-tag quay.io/redhat-services-prod/project-kessel-tenant/kessel-inventory/inventory-api=latest
-
 }
 
 apply_schema() {
