@@ -229,6 +229,7 @@ apply_schema() {
 
 setup_kessel_inventory_consumer() {
   echo "Kessel Inventory Consumer is setting up.."
+  # Add kessel-relations parameters again, otherwise it gets redeployed with default params
   bonfire deploy kessel -C kessel-inventory-consumer -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0
 }
 
