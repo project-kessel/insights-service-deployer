@@ -81,7 +81,7 @@ deploy() {
   -p kessel-relations/SPICEDB_CPU_REQUEST=1000m \
   -p kessel-relations/SPICEDB_MEMORY_LIMIT=512Mi \
   -p kessel-relations/SPICEDB_CPU_LIMIT=1000m \
-  --no-remove-resources all
+  --no-remove-resources all \
   -p rbac/ROLE_CREATE_ALLOW_LIST="remediations,\
 inventory,\
 policies,\
