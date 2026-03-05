@@ -156,7 +156,6 @@ force_seed_rbac_data_in_relations() {
   done
   echo "$OUTPUT"
 
-  setup_kessel
   setup_rbac_consumer
 }
 
@@ -195,20 +194,6 @@ idmsvc" \
     -p rbac/V2_MIGRATION_APP_EXCLUDE_LIST="approval" \
     -p rbac/V2_MIGRATION_RESOURCE_EXCLUDE_LIST="empty-exclude-list" \
     --namespace $NAMESPACE | oc apply -f - -n $NAMESPACE
-}
-
-setup_kessel() {
-  echo "Kessel inventory is setting up.."
-  bonfire deploy kessel -C kessel-inventory -C kessel-relations --set-image-tag quay.io/redhat-services-prod/project-kessel-tenant/kessel-inventory/inventory-api=latest -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0 \
-  -p kessel-relations/SPICEDB_POSTGRES_CPU_LIMIT=2000m \
-  -p kessel-relations/SPICEDB_POSTGRES_CPU_REQUEST=2000m \
-  -p kessel-relations/SPICEDB_POSTGRES_MEMORY_LIMIT=512Mi \
-  -p kessel-relations/SPICEDB_POSTGRES_MEMORY_REQUEST=512Mi \
-  -p kessel-relations/SPICEDB_MEMORY_REQUEST=512Mi \
-  -p kessel-relations/SPICEDB_CPU_REQUEST=1000m \
-  -p kessel-relations/SPICEDB_MEMORY_LIMIT=512Mi \
-  -p kessel-relations/SPICEDB_CPU_LIMIT=1000m \
-  --no-remove-resources all
 }
 
 apply_schema() {
