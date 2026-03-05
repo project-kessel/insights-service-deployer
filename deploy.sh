@@ -73,6 +73,15 @@ deploy() {
   -p rbac/REPLICATION_TO_RELATION_ENABLED=True \
   -p rbac/KAFKA_ENABLED=False -p rbac/NOTIFICATONS_ENABLED=False \
   -p rbac/NOTIFICATIONS_RH_ENABLED=False \
+  -p kessel-relations/SPICEDB_POSTGRES_CPU_LIMIT=2000m \
+  -p kessel-relations/SPICEDB_POSTGRES_CPU_REQUEST=2000m \
+  -p kessel-relations/SPICEDB_POSTGRES_MEMORY_LIMIT=512Mi \
+  -p kessel-relations/SPICEDB_POSTGRES_MEMORY_REQUEST=512Mi \
+  -p kessel-relations/SPICEDB_MEMORY_REQUEST=512Mi \
+  -p kessel-relations/SPICEDB_CPU_REQUEST=1000m \
+  -p kessel-relations/SPICEDB_MEMORY_LIMIT=512Mi \
+  -p kessel-relations/SPICEDB_CPU_LIMIT=1000m \
+  --no-remove-resources all
   -p rbac/ROLE_CREATE_ALLOW_LIST="remediations,\
 inventory,\
 policies,\
