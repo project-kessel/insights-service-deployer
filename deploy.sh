@@ -98,7 +98,8 @@ idmsvc" \
   -p host-inventory/BYPASS_RBAC=false \
   -p host-inventory/BYPASS_KESSEL=false \
   --set-image-tag quay.io/cloudservices/unleash-proxy=latest \
-  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest
+  --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/insights-rbac-ui=latest \
+  --no-remove-resources all
 
   setup_rbac_debezium
   apply_schema "$LOCAL_SCHEMA_FILE"
@@ -189,7 +190,16 @@ idmsvc" \
 
 setup_kessel() {
   echo "Kessel inventory is setting up.."
-  bonfire deploy kessel -C kessel-inventory -C kessel-relations --set-image-tag quay.io/redhat-services-prod/project-kessel-tenant/kessel-inventory/inventory-api=latest -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0
+  bonfire deploy kessel -C kessel-inventory -C kessel-relations --set-image-tag quay.io/redhat-services-prod/project-kessel-tenant/kessel-inventory/inventory-api=latest -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0 \
+  -p kessel-relations/SPICEDB_POSTGRES_CPU_LIMIT=2000m \
+  -p kessel-relations/SPICEDB_POSTGRES_CPU_REQUEST=2000m \
+  -p kessel-relations/SPICEDB_POSTGRES_MEMORY_LIMIT=512Mi \
+  -p kessel-relations/SPICEDB_POSTGRES_MEMORY_REQUEST=512Mi \
+  -p kessel-relations/SPICEDB_MEMORY_REQUEST=512Mi \
+  -p kessel-relations/SPICEDB_CPU_REQUEST=1000m \
+  -p kessel-relations/SPICEDB_MEMORY_LIMIT=512Mi \
+  -p kessel-relations/SPICEDB_CPU_LIMIT=1000m \
+  --no-remove-resources all
 }
 
 apply_schema() {
@@ -230,7 +240,16 @@ apply_schema() {
 setup_kessel_inventory_consumer() {
   echo "Kessel Inventory Consumer is setting up.."
   # Add kessel-relations parameters again, otherwise it gets redeployed with default params
-  bonfire deploy kessel -C kessel-inventory-consumer -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0
+  bonfire deploy kessel -C kessel-inventory-consumer -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0 \
+  -p kessel-relations/SPICEDB_POSTGRES_CPU_LIMIT=2000m \
+  -p kessel-relations/SPICEDB_POSTGRES_CPU_REQUEST=2000m \
+  -p kessel-relations/SPICEDB_POSTGRES_MEMORY_LIMIT=512Mi \
+  -p kessel-relations/SPICEDB_POSTGRES_MEMORY_REQUEST=512Mi \
+  -p kessel-relations/SPICEDB_MEMORY_REQUEST=512Mi \
+  -p kessel-relations/SPICEDB_CPU_REQUEST=1000m \
+  -p kessel-relations/SPICEDB_MEMORY_LIMIT=512Mi \
+  -p kessel-relations/SPICEDB_CPU_LIMIT=1000m \
+  --no-remove-resources all
 }
 
 download_debezium_configuration() {
