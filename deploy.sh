@@ -233,6 +233,40 @@ setup_kessel_inventory_consumer() {
   bonfire deploy kessel -C kessel-inventory-consumer -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0
 }
 
+# parameters $1: compliance git commit (full SHA, optional - defaults to latest)
+deploy_compliance() {
+  echo "Deploying compliance..."
+
+  if [ -n "$1" ]; then
+    COMPLIANCE_COMMIT="$1"
+  else
+    COMPLIANCE_COMMIT=$(echo $(git ls-remote https://github.com/RedHatInsights/compliance-backend HEAD) | cut -d ' ' -f1)
+  fi
+  COMPLIANCE_SHORT_COMMIT="${COMPLIANCE_COMMIT:0:7}"
+
+  RBAC_GIT_COMMIT=$(echo $(git ls-remote https://github.com/RedHatInsights/insights-rbac HEAD) | cut -d ' ' -f1)
+  RBAC_SHORT_COMMIT="${RBAC_GIT_COMMIT:0:7}"
+
+  login
+  check_bonfire_namespace
+
+  bonfire deploy compliance --source=appsre \
+  --ref-env insights-production \
+  --set-image-tag quay.io/cloudservices/compliance-backend="${COMPLIANCE_SHORT_COMMIT}" \
+  --timeout 900 \
+  --optional-deps-method all \
+  --frontends false \
+  --set-template-ref compliance="${COMPLIANCE_COMMIT}" \
+  -p rbac/RBAC_KAFKA_CONSUMER_GROUP_ID=connect-relations-sink-connector \
+  -p rbac/REPLICATION_TO_RELATION_ENABLED=True \
+  --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac="${RBAC_SHORT_COMMIT}" \
+  --set-template-ref rbac="${RBAC_GIT_COMMIT}"
+
+  apply_schema
+
+  setup_rbac_debezium
+}
+
 download_debezium_configuration() {
   RAW_BASE_URL="https://raw.githubusercontent.com/RedHatInsights/insights-rbac/master"
   FILES=(
@@ -436,6 +470,7 @@ usage() {
   echo "  deploy_unleash_importer_image      Deploy unleash importer"
   echo "  add_hosts_to_hbi [org_id] [count]  Add test hosts to HBI"
   echo "  add_users                          Add test users"
+  echo "  compliance [commit]                Deploy compliance with rbac debezium (default: latest commit)"
   echo "  host-replication-kafka             Set up host replication kafka connectors/consumers"
   echo "  apply-schema  [schema_file]        Applies the schema from the file in the arg, if no arg then the latest one from rbac-config"
   echo ""
@@ -496,6 +531,9 @@ case "$1" in
   host-replication-kafka)
     setup_kessel_inventory_consumer
     create_hbi_connectors
+    ;;
+  compliance)
+    deploy_compliance "$2"
     ;;
   apply-schema)
     apply_schema "$2"

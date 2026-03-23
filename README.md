@@ -47,6 +47,25 @@ no pod is crash looping. A common source of error is that pods are stuck in `Ima
 due to Konflux referencing an image that doesn't exist yet. (The script tries to
 tackle this to some degree by requesting `latest` image tags and soon by checking if tags exist.)
 
+## Deploy Compliance
+
+Deploy the compliance service along with rbac (including debezium for replication). Both the compliance and rbac commit SHAs are resolved automatically from their respective GitHub repositories (`compliance-backend` and `insights-rbac`), but the compliance commit can optionally be overridden.
+
+```shell
+# Deploy compliance with the latest commits from both repos
+./deploy.sh compliance
+
+# Deploy compliance with a specific commit
+./deploy.sh compliance <full-compliance-commit-sha>
+```
+
+The command will:
+1. Fetch the latest commit from [compliance-backend](https://github.com/RedHatInsights/compliance-backend) (or use the provided one)
+2. Fetch the latest commit from [insights-rbac](https://github.com/RedHatInsights/insights-rbac)
+3. Deploy compliance with the resolved image tags and template refs
+4. Apply the SpiceDB schema
+5. Set up rbac debezium connectors
+
 ## Demo steps for HBI & rbac end-to-end flow with kessel from console
 
 These are the additional steps to get an end-to-end flow from the HBI 
