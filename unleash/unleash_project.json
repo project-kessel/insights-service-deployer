@@ -54,6 +54,22 @@
         "createdAt": "2025-04-17T21:21:08Z"
       },
       {
+          "name": "hbi.api.kessel-groups",
+          "description": "Gates the groups API functionality for Kessel (RHINENG-21397).",
+          "type": "release",
+          "project": "default",
+          "stale": false,
+          "enabled": false,
+          "strategies": [
+              {
+                  "name": "default",
+                  "parameters": {}
+              }
+          ],
+          "variants": [],
+          "createdAt": "2025-11-18T20:58:51.167Z"
+      },
+      {
         "name": "platform.rbac.workspaces-list",
         "description": "Enable UI workspace section with v1 role creation wizard.",
         "type": "release",
