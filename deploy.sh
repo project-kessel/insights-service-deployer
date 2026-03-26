@@ -23,7 +23,8 @@ check_bonfire_namespace() {
   NAMESPACE=`oc project -q 2>/dev/null || true`
   if [[ -z $NAMESPACE || "${NAMESPACE}" == "default" ]]; then
     echo "No bonfire namespace set or using 'default', reserving a namespace for you now (duration 10hr)..."
-    bonfire namespace reserve --duration 10h
+    NAMESPACE=$(bonfire namespace reserve --duration 10h)
+    oc project $NAMESPACE
   fi
 }
 
@@ -191,7 +192,7 @@ idmsvc" \
 
 setup_kessel() {
   echo "Kessel inventory is setting up.."
-  bonfire deploy kessel -C kessel-inventory -C kessel-relations --set-image-tag quay.io/redhat-services-prod/project-kessel-tenant/kessel-inventory/inventory-api=latest -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0
+  bonfire deploy kessel -C kessel-inventory -C kessel-relations -n $(oc project -q) --set-image-tag quay.io/redhat-services-prod/project-kessel-tenant/kessel-inventory/inventory-api=latest -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0
 }
 
 apply_schema() {
@@ -285,10 +286,9 @@ deploy_compliance() {
   RBAC_GIT_COMMIT=$(echo $(git ls-remote https://github.com/RedHatInsights/insights-rbac HEAD) | cut -d ' ' -f1)
   RBAC_SHORT_COMMIT="${RBAC_GIT_COMMIT:0:7}"
 
-  login
-  check_bonfire_namespace
-
+  export NAMESPACE=$(oc project -q)
   bonfire deploy compliance --source=appsre \
+  -n $NAMESPACE \
   --ref-env insights-production \
   --set-image-tag quay.io/cloudservices/compliance-backend="${COMPLIANCE_SHORT_COMMIT}" \
   --timeout 900 \
