@@ -233,9 +233,45 @@ setup_kessel_inventory_consumer() {
   bonfire deploy kessel -C kessel-inventory-consumer -p kessel-relations/SPICEDB_QUANTIZATION_INTERVAL=2.5s -p kessel-relations/SPICEDB_QUANTIZATION_STALENESS_PERCENT=0
 }
 
+setup_service_account() {
+    ENV_NAMESPACE="env-$(oc project -q)"
+    ADMIN_USER=$(oc get secret "$ENV_NAMESPACE-keycloak" -o jsonpath='{.data.username}' | base64 -d)
+    ADMIN_PASS=$(oc get secret "$ENV_NAMESPACE-keycloak" -o jsonpath='{.data.password}' | base64 -d)
+    KEYCLOAK_URL=$(oc get route -l app=${ENV_NAMESPACE} -o json | jq '.items[] | select(.metadata.name | contains("auth")) | select(.spec.port.targetPort == "keycloak").spec.host' -r)
+    TOKEN=$(curl -s -X POST "https://${KEYCLOAK_URL}/auth/realms/master/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "username=${ADMIN_USER}" \
+        -d "password=${ADMIN_PASS}" \
+        -d "grant_type=password" \
+        -d "client_id=admin-cli" | jq -r '.access_token')
+    CLIENT_ID="service-account-console"
+    curl -X POST "https://${KEYCLOAK_URL}/auth/admin/realms/redhat-external/clients" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "clientId": "'${CLIENT_ID}'",
+              "enabled": true,
+              "serviceAccountsEnabled": true,
+              "publicClient": false,
+              "standardFlowEnabled": false,
+              "directAccessGrantsEnabled": false
+            }'
+    INTERNAL_CLIENT_ID=$(curl -s "https://${KEYCLOAK_URL}/auth/admin/realms/redhat-external/clients" \
+      -H "Authorization: Bearer ${TOKEN}" | jq -r '.[] | select(.clientId=="'${CLIENT_ID}'") | .id')
+    CLIENT_SECRET=$(curl -s "https://${KEYCLOAK_URL}/auth/admin/realms/redhat-external/clients/${INTERNAL_CLIENT_ID}/client-secret" \
+      -H "Authorization: Bearer ${TOKEN}" | jq -r '.value')
+    ISSUER_URL=$(curl -s "https://${KEYCLOAK_URL}/auth/realms/redhat-external/.well-known/openid-configuration" | jq -r '.issuer')
+
+    echo "$CLIENT_ID" "$CLIENT_SECRET" "$ISSUER_URL"
+}
+
 # parameters $1: compliance git commit (full SHA, optional - defaults to latest)
 deploy_compliance() {
+  : ${FRONTENDS:="false"}
+
   echo "Deploying compliance..."
+  echo "Deploying frontends: ${FRONTENDS}"
+
 
   if [ -n "$1" ]; then
     COMPLIANCE_COMMIT="$1"
@@ -255,16 +291,44 @@ deploy_compliance() {
   --set-image-tag quay.io/cloudservices/compliance-backend="${COMPLIANCE_SHORT_COMMIT}" \
   --timeout 900 \
   --optional-deps-method all \
-  --frontends false \
   --set-template-ref compliance="${COMPLIANCE_COMMIT}" \
   -p rbac/RBAC_KAFKA_CONSUMER_GROUP_ID=connect-relations-sink-connector \
   -p rbac/REPLICATION_TO_RELATION_ENABLED=True \
   --set-image-tag quay.io/redhat-services-prod/hcc-accessmanagement-tenant/insights-rbac="${RBAC_SHORT_COMMIT}" \
-  --set-template-ref rbac="${RBAC_GIT_COMMIT}"
+  --set-template-ref rbac="${RBAC_GIT_COMMIT}" \
+  --frontends ${FRONTENDS}
+
+  NAMESPACE=$(oc project -q)
+  SA_OUTPUT=($(setup_service_account))
+  CLIENT_ID="${SA_OUTPUT[0]}"
+  CLIENT_SECRET="${SA_OUTPUT[1]}"
+  ISSUER_URL="${SA_OUTPUT[2]}"
+
+  oc get clowdapp compliance -o json | \
+    jq '(.spec.deployments[] | select(.name == "service")).podSpec.env += [
+        { "name": "KESSEL_ENABLED", "value": "true"},
+        { "name": "KESSEL_URL", "value": "kessel-inventory-api.'"${NAMESPACE}"'.svc.cluster.local:9000"},
+        { "name": "KESSEL_INSECURE", "value": "true"},
+        { "name": "KESSEL_AUTH_ENABLED", "value": "true"},
+        { "name": "KESSEL_AUTH_CLIENT_ID", "value": "'"${CLIENT_ID}"'"},
+        { "name": "KESSEL_AUTH_CLIENT_SECRET", "value": "'"${CLIENT_SECRET}"'"},
+        { "name": "KESSEL_AUTH_OIDC_ISSUER", "value": "'"${ISSUER_URL}"'"},
+        { "name": "KESSEL_PRINCIPAL_DOMAIN", "value": "redhat"}]' | \
+    oc apply -f -
 
   apply_schema
 
   setup_rbac_debezium
+
+  # Allow the mocked user id for service-to-service calls
+  oc create secret generic system-users --dry-run=client -o yaml --from-literal="system-users.json={
+      \"mocked-user-id-because-token-validation-is-disabled\": {
+        \"admin\": true,
+        \"is_service_account\": true,
+        \"allow_any_org\": true
+      }
+  }" | oc apply -f -
+  oc delete pod -l pod=rbac-service
 }
 
 download_debezium_configuration() {
