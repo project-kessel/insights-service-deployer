@@ -39,7 +39,7 @@ deploy() {
 
   NAMESPACE=`oc project -q`
 
-  HBI_CUSTOM_IMAGE="quay.io/cloudservices/insights-inventory"
+  HBI_CUSTOM_IMAGE="quay.io/redhat-services-prod/insights-management-tenant/insights-host-inventory/insights-host-inventory"
   HBI_CUSTOM_IMAGE_TAG=latest
   HBI_CUSTOM_IMAGE_PARAMETER=""
   LOCAL_SCHEMA_FILE=""
@@ -476,7 +476,7 @@ usage() {
   echo ""
   echo "Deploy Options:"
   echo "  template_ref    Git ref for host-inventory deploy template (default: latest commit)"
-  echo "  image          Custom host-inventory image (default: quay.io/cloudservices/insights-inventory)"
+  echo "  image          Custom host-inventory image (default: quay.io/redhat-services-prod/insights-management-tenant/insights-host-inventory/insights-host-inventory)"
   echo "  tag            Custom image tag (default: latest)"
   echo "  schema_file    Path to local SpiceDB schema file (default: download from rbac-config)"
   echo ""
