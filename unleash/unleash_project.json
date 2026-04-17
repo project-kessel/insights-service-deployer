@@ -164,21 +164,6 @@
         "variants": [],
         "disabled": false,
         "segments": []
-      },
-      {
-        "name": "flexibleRollout",
-        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        "featureName": "rbac.workspace-access-check-v2.enabled",
-        "title": null,
-        "parameters": {
-          "groupId": "rbac.workspace-access-check-v2.enabled",
-          "rollout": "100",
-          "stickiness": "default"
-        },
-        "constraints": [],
-        "variants": [],
-        "disabled": false,
-        "segments": []
       }
     ],
     "featureEnvironments": [
