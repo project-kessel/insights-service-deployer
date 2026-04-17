@@ -86,6 +86,22 @@
         "stale": false,
         "impressionData": false,
         "archived": false
+      },
+      {
+        "name": "rbac.workspace-access-check-v2.enabled",
+        "description": "Enable workspace access check v2 for RBAC.",
+        "type": "release",
+        "project": "default",
+        "stale": false,
+        "enabled": true,
+        "strategies": [
+            {
+                "name": "default",
+                "parameters": {}
+            }
+        ],
+        "variants": [],
+        "createdAt": "2026-04-17T00:00:00Z"
       }
     ],
     "featureStrategies": [
@@ -192,6 +208,13 @@
         "environment": "development",
         "variants": [],
         "name": "platform.rbac.workspaces"
+      },
+      {
+        "enabled": true,
+        "featureName": "rbac.workspace-access-check-v2.enabled",
+        "environment": "development",
+        "variants": [],
+        "name": "rbac.workspace-access-check-v2.enabled"
       }
     ],
     "contextFields": [],
