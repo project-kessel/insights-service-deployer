@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+set -x
 
 EPHEMERAL_TOKEN=$(oc whoami --show-token)
 EPHEMERAL_SERVER=$(oc whoami --show-server)
