@@ -329,6 +329,7 @@ deploy_compliance() {
       }
   }" | oc apply -f -
   oc delete pod -l pod=rbac-service
+  oc wait pod -l pod=rbac-service --for=condition=Ready --timeout=300s
 }
 
 download_debezium_configuration() {
