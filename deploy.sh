@@ -134,7 +134,7 @@ force_seed_rbac_data_in_relations() {
   oc rollout status deployment/rbac-service -w
   RBAC_SERVICE_POD=$(oc get pods -l pod=rbac-service -o json | jq -r '.items[] | select(.status.phase == "Running" and .metadata.deletionTimestamp == null) | .metadata.name' | head -n 1)
   while true; do
-    OUTPUT=$(oc exec -it "$RBAC_SERVICE_POD" --container=rbac-service -- /bin/bash -c "./rbac/manage.py seeds --force-create-relationships"  | grep -E 'INFO: \*\*\*|ERROR:')
+    OUTPUT=$(oc exec "$RBAC_SERVICE_POD" --container=rbac-service -- /bin/bash -c "./rbac/manage.py seeds --force-create-relationships" 2>&1  | grep -E 'INFO: \*\*\*|ERROR:')
     EXIT_STATUS=$?
     if [ $EXIT_STATUS -ne 0 ]; then
       echo "Rbac service pod was OOMKilled or was otherwise unavailable when attempting to run the seed script. Trying again..."
@@ -477,19 +477,19 @@ add_hosts_to_hbi() {
   HOST_INVENTORY_READ_POD=$(oc get pods -l pod=host-inventory-service-reads --no-headers -o custom-columns=":metadata.name" --field-selector=status.phase==Running | head -1)
   HOST_INVENTORY_DB_POD=$(oc get pods -l app=host-inventory,service=db,sub=local_db --no-headers -o custom-columns=":metadata.name" --field-selector=status.phase==Running | head -1)
   HBI_BOOTSTRAP_SERVERS=$(oc get svc -o json | jq -r '.items[] | select(.metadata.name | test("^env-ephemeral.*-kafka-bootstrap")) | "\(.metadata.name).\(.metadata.namespace).svc"')
-  BEFORE_COUNT=$(oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"select count(*) from hbi.hosts;\"" | head -3 | tail -1 | tr -d '[:space:]')
+  BEFORE_COUNT=$(oc exec "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"select count(*) from hbi.hosts;\"" 2>&1 | head -3 | tail -1 | tr -d '[:space:]')
   TARGET_COUNT=$((BEFORE_COUNT + NUM_HOSTS))
   AFTER_COUNT=$BEFORE_COUNT
 
   echo "Sending ${NUM_HOSTS} hosts to hbi using kafka producer..."
-  oc exec -it -c host-inventory-service-reads "$HOST_INVENTORY_READ_POD" -- /bin/bash -c 'NUM_HOSTS="$1" INVENTORY_HOST_ACCOUNT="$2" KAFKA_BOOTSTRAP_SERVERS="$3" python3 utils/kafka_producer.py' _ "$NUM_HOSTS" "$ORG_ID" "$HBI_BOOTSTRAP_SERVERS"
+  oc exec -c host-inventory-service-reads "$HOST_INVENTORY_READ_POD" -- /bin/bash -c 'NUM_HOSTS="$1" INVENTORY_HOST_ACCOUNT="$2" KAFKA_BOOTSTRAP_SERVERS="$3" python3 utils/kafka_producer.py' _ "$NUM_HOSTS" "$ORG_ID" "$HBI_BOOTSTRAP_SERVERS"
 
   until [ "$AFTER_COUNT" == "$TARGET_COUNT" ]; do
     echo "Waiting for ${NUM_HOSTS} hosts added via kafka to sync to the hbi db... [AFTER_COUNT: ${AFTER_COUNT}, TARGET_COUNT: ${TARGET_COUNT}]"
     sleep 1
-    AFTER_COUNT=$(oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"select count(*) from hbi.hosts;\"" | head -3 | tail -1 | tr -d '[:space:]')
+    AFTER_COUNT=$(oc exec "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"select count(*) from hbi.hosts;\"" 2>&1 | head -3 | tail -1 | tr -d '[:space:]')
   done
-  AFTER_COUNT=$(oc exec -it "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"select count(*) from hbi.hosts;\"" | head -3 | tail -1 | tr -d '[:space:]')
+  AFTER_COUNT=$(oc exec "$HOST_INVENTORY_DB_POD" -- /bin/bash -c "psql -d host-inventory -c \"select count(*) from hbi.hosts;\"" 2>&1 | head -3 | tail -1 | tr -d '[:space:]')
   echo "Done. [AFTER_COUNT: ${AFTER_COUNT}, TARGET_COUNT: ${TARGET_COUNT}]"
 }
 
