@@ -39,9 +39,10 @@ deploy() {
 
   NAMESPACE=`oc project -q`
 
-  HBI_CUSTOM_IMAGE="quay.io/redhat-services-prod/insights-management-tenant/insights-host-inventory/insights-host-inventory"
-  HBI_CUSTOM_IMAGE_TAG=latest
-  HBI_CUSTOM_IMAGE_PARAMETER=""
+  HBI_CUSTOM_IMAGE="quay.io/redhat-user-workloads/insights-management-tenant/insights-host-inventory/insights-host-inventory"
+  HBI_CUSTOM_IMAGE_PARAMETER="-p host-inventory/IMAGE=${HBI_CUSTOM_IMAGE}"
+  HBI_CUSTOM_IMAGE_TAG=""
+  HBI_CUSTOM_IMAGE_TAG_PARAMETER=""
   LOCAL_SCHEMA_FILE=""
 
   if [ -n "$1" ]; then
@@ -56,6 +57,7 @@ deploy() {
   fi
   if [ -n "$3" ]; then
     HBI_CUSTOM_IMAGE_TAG="$3"
+    HBI_CUSTOM_IMAGE_TAG_PARAMETER="--set-image-tag ${HBI_CUSTOM_IMAGE}=${HBI_CUSTOM_IMAGE_TAG}"
   fi
   if [ -n "$4" ]; then
     LOCAL_SCHEMA_FILE="$4"
@@ -90,7 +92,7 @@ idmsvc" \
   ${HBI_CUSTOM_IMAGE_PARAMETER} -p rbac/V2_MIGRATION_APP_EXCLUDE_LIST="approval" \
   -p rbac/V2_MIGRATION_RESOURCE_EXCLUDE_LIST="empty-exclude-list" \
   -p host-inventory/KESSEL_TARGET_URL=kessel-inventory-api.$NAMESPACE.svc.cluster.local:9000 \
-  --set-image-tag "${HBI_CUSTOM_IMAGE}=${HBI_CUSTOM_IMAGE_TAG}" \
+  ${HBI_CUSTOM_IMAGE_TAG_PARAMETER} \
   --set-image-tag quay.io/redhat-services-prod/rh-platform-experien-tenant/service-accounts="e187df2" \
   --set-image-tag quay.io/redhat-services-prod/insights-management-tenant/insights-host-inventory/host-inventory-frontend="${HOST_FRONTEND_GIT_COMMIT}" \
   --set-image-tag quay.io/redhat-services-prod/hcc-platex-services/chrome-service=latest \
