@@ -287,6 +287,9 @@ deploy_compliance() {
   RBAC_GIT_COMMIT=$(echo $(git ls-remote https://github.com/RedHatInsights/insights-rbac HEAD) | cut -d ' ' -f1)
   RBAC_SHORT_COMMIT="${RBAC_GIT_COMMIT:0:7}"
 
+  login
+  check_bonfire_namespace
+
   export NAMESPACE=$(oc project -q)
   bonfire deploy compliance --source=appsre \
   -n $NAMESPACE \
@@ -301,7 +304,7 @@ deploy_compliance() {
   --set-template-ref rbac="${RBAC_GIT_COMMIT}" \
   --frontends ${FRONTENDS}
 
-  NAMESPACE=$(oc project -q)
+  # NAMESPACE=$(oc project -q)
   SA_OUTPUT=($(setup_service_account))
   CLIENT_ID="${SA_OUTPUT[0]}"
   CLIENT_SECRET="${SA_OUTPUT[1]}"
