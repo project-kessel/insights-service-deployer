@@ -215,68 +215,64 @@ check_port_conflicts() {
         return
     fi
 
-    # Dynamically extract local ports from the forward section of the okteto template
+    # Use a robust awk command to find and parse port-forwarding lines. This is
+    # more concise than grep|sed and correctly handles the YAML structure where
+    # the port-forward is the second field.
     local conflict_ports
-    conflict_ports=($(grep -E '^\s*-\s*[0-9]{1,5}:[0-9]{1,5}' okteto/okteto.template.yaml | sed -e 's/^\s*-\s*//' -e 's/:.*//' | sort -u))
+    conflict_ports=($(awk '{if ($2 ~ /^[0-9]{1,5}:[0-9]{1,5}/) {split($2, p, ":"); print p[1]}}' okteto/okteto.template.yaml | sort -u))
 
     if [[ ${#conflict_ports[@]} -eq 0 ]]; then
-        log "✅ No ports to check in okteto.template.yaml."
+        log "✅ No forward-ports defined in okteto.template.yaml to check."
         return
     fi
     
     log "   Ports to check: ${conflict_ports[*]}"
 
-    local ports_in_use=()
-    local port_processes=()
-    
+    local real_conflicts=()
     for port in "${conflict_ports[@]}"; do
-        # Validate port number
-        if [[ ! "$port" =~ ^[0-9]+$ ]] || [[ "$port" -lt 1 ]] || [[ "$port" -gt 65535 ]]; then
-            warn "⚠️  Invalid port number: $port"
-            continue
-        fi
-
-        local process_info=""
-        local port_in_use=false
-
-        # Try lsof first (most detailed)
+        # Try lsof first (most detailed, can identify 'okteto' processes)
         if command -v lsof >/dev/null 2>&1; then
-            if lsof -i ":$port" >/dev/null 2>&1; then
-                port_in_use=true
-                process_info=$(lsof -i ":$port" 2>/dev/null | tail -1 | awk '{print $1, $2}')
+            local process_info
+            process_info=$(lsof -i ":$port" -sTCP:LISTEN -Fpc 2>/dev/null | head -n 2)
+
+            if [[ -n "$process_info" ]]; then
+                local cmd_name=$(echo "$process_info" | grep '^c' | sed 's/^c//')
+                if [[ "$cmd_name" =~ "okteto" ]]; then
+                    log "   Port $port is in use by an 'okteto' process, which is acceptable."
+                else
+                    local pid=$(echo "$process_info" | grep '^p' | sed 's/^p//')
+                    real_conflicts+=("Port $port is occupied by: '$cmd_name' (PID: $pid)")
+                fi
             fi
         # Fallback to ss
         elif command -v ss >/dev/null 2>&1; then
-            if ss -ln | grep -q ":$port "; then
-                port_in_use=true
-                process_info="(process details unavailable with ss)"
+            if ss -lnt "sport = :$port" | grep -q ":$port"; then
+                warn "   Port $port is in use (checked with 'ss'). Cannot determine process name."
+                warn "   Assuming it's a conflict. If this is another okteto process, you can bypass this check or install 'lsof'."
+                real_conflicts+=("Port $port is in use (process details unavailable with 'ss')")
             fi
         # Fallback to netstat
         elif command -v netstat >/dev/null 2>&1; then
-            if netstat -ln 2>/dev/null | grep -q ":$port "; then
-                port_in_use=true
-                process_info="(process details unavailable with netstat)"
+             if netstat -lnt 2>/dev/null | grep -q ":$port "; then
+                warn "   Port $port is in use (checked with 'netstat'). Cannot determine process name."
+                warn "   Assuming it's a conflict. If this is another okteto process, you can bypass this check or install 'lsof'."
+                real_conflicts+=("Port $port is in use (process details unavailable with 'netstat')")
             fi
         else
-            warn "⚠️  No port checking tools available (lsof, ss, netstat)"
-            return 0
-        fi
-
-        if [[ "$port_in_use" == "true" ]]; then
-            ports_in_use+=("$port")
-            port_processes+=("$process_info")
+            warn "⚠️  No port checking tools available (lsof, ss, netstat). Skipping check."
+            return 0 # Continue without checking
         fi
     done
 
-    if [[ ${#ports_in_use[@]} -gt 0 ]]; then
-        error "❌ Port conflicts detected that will cause okteto SSH tunnel failures:"
-        for i in "${!ports_in_use[@]}"; do
-            error "   Port ${ports_in_use[$i]} is occupied by: ${port_processes[$i]}"
+    if [[ ${#real_conflicts[@]} -gt 0 ]]; then
+        error "❌ Port conflicts detected. Another process is using a port needed by okteto:"
+        for conflict in "${real_conflicts[@]}"; do
+            error "   $conflict"
         done
         error ""
-        error "🔧 To fix: Stop the processes using these ports"
-        error "   Most common fix: pkill -f 'port-forward'"
-        error "   Or set: OKTETO_SKIP_PORT_CHECK=true (if you know what you're doing)"
+        error "🔧 To fix: Stop the conflicting process."
+        error "   (If it's a zombie 'oc port-forward', try: pkill -f 'port-forward')"
+        error "   To bypass this check, run: export OKTETO_SKIP_PORT_CHECK=true"
         exit 1
     fi
     
