@@ -1,3 +1,5 @@
+# ⛔️ This repository is no longer actively maintained. Consider using our pure bonfire implementation. Instructions can be found via "Kessel Internal Documentation" in InScope ⛔️
+
 # insights-service-deployer
 
 Note: Services used here are only available to Red Hat employees
